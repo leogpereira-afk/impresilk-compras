@@ -270,7 +270,15 @@ Deno.serve(async (req) => {
   const h = Object.fromEntries(req.headers);
   const token = h["x-token"] || body.token;
   const TOKEN = Deno.env.get("COMPRAS_TOKEN");
-  if (!TOKEN || token !== TOKEN) return json({ error: "Não autorizado" }, 401);
+  // Segundo token, SÓ do servidor: o COMPRAS_TOKEN viaja no config.js de um
+  // repo PÚBLICO — quem lê o GitHub tem ele. Enquanto 'list' e 'getCfg'
+  // aceitavam só esse token, qualquer pessoa baixava o banco inteiro (todo
+  // fornecedor, todo preço, todo telefone) sem login nenhum. Este aqui nunca
+  // sai de secret para secret: quem o usa é o backup do Hub, servidor a
+  // servidor. Sem ele configurado, ninguém entra por essa porta.
+  const TOKEN_BACKUP = Deno.env.get("COMPRAS_BACKUP_TOKEN");
+  const ehBackup = !!TOKEN_BACKUP && token === TOKEN_BACKUP;
+  if (!ehBackup && (!TOKEN || token !== TOKEN)) return json({ error: "Não autorizado" }, 401);
 
   const { action } = body;
   const cfg = await lerCfg();
@@ -287,10 +295,21 @@ Deno.serve(async (req) => {
   // backup), servidor-a-servidor com o x-token deste sistema — não há pessoa
   // logada, logo não há crachá. O x-token é o gate: é secret do Supabase, não
   // viaja para navegador nenhum além do próprio app.
-  const PUBLICAS = ["ping", "cfgPublico", "list", "getCfg", "novaSolicitacao", "andamento", "verPublico",
+  const PUBLICAS = ["ping", "cfgPublico", "novaSolicitacao", "andamento", "verPublico",
     "verCotacao", "responderCotacao"];
-  if (!PUBLICAS.includes(action) && !autenticado) return json({ error: "Entre de novo: sessão inválida ou vencida.", semSenha: true }, 401);
-  if (!PUBLICAS.includes(action) && !podeFazer(quem, action)) {
+  // O backup do Hub não tem pessoa logada (é servidor a servidor), então estas
+  // duas passam sem crachá — mas SÓ com o token de backup, nunca com o público.
+  // 'list' devolve o banco CRU, sem a máscara de leitura — então nem todo mundo
+  // logado pode chamá-lo: um solicitante levaria por essa porta todos os preços
+  // que a tela dele esconde. Fica com o backup e com a direção.
+  const DO_BACKUP = ["list", "getCfg"];
+  if (DO_BACKUP.includes(action)) {
+    const podeVerTudo = action === "getCfg" ? autenticado : perfilDe(quem) === "direcao";
+    if (!ehBackup && !podeVerTudo) return json({ error: "Não autorizado" }, 401);
+  } else if (!PUBLICAS.includes(action) && !autenticado) {
+    return json({ error: "Entre de novo: sessão inválida ou vencida.", semSenha: true }, 401);
+  }
+  if (!PUBLICAS.includes(action) && !DO_BACKUP.includes(action) && !podeFazer(quem, action)) {
     await registrarLog({ acao: "bloqueado: " + action, por, perfil: quem!.perfil });
     return json({ error: "Seu acesso não permite isso. Fale com a direção.", semPermissao: true }, 403);
   }
