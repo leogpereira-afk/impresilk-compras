@@ -25,7 +25,7 @@
 import { json, preflight } from "../_shared/cors.ts";
 import { COLECOES } from "../_shared/colecoes.ts";
 import {
-  cfgSemSegredo, podeFazer, motivoRecusa,
+  cfgSemSegredo, podeFazer, motivoRecusa, reporEscondidos,
   filtrarLeitura, identificarPorCracha, perfilDe, type Quem,
 } from "../_shared/acesso.ts";
 import {
@@ -151,7 +151,14 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
   // compra que o escritório tinha acabado de cancelar.
   const situacaoValida = (antigo && antigo.situacao) || novo.situacao;
   if (antigo && antigo.situacao === "cancelada") novo.situacao = "cancelada";
-  if (col === "oc" && Array.isArray(novo.recebimentos) && novo.recebimentos.length &&
+  // Cancelar é decisão deliberada de quem tem acesso e MANDA — o recálculo
+  // abaixo não pode desfazê-la. Antes, `situacaoValida` vinha da situação
+  // GUARDADA ('parcial'), o recálculo rodava assim mesmo e devolvia a ordem
+  // para 'parcial': o comprador cancelava, escrevia o motivo, e a compra
+  // continuava viva. A trava da linha acima cuida do caso inverso — modal
+  // velho tentando ressuscitar o que já estava cancelado.
+  if (col === "oc" && novo.situacao !== "cancelada" &&
+      Array.isArray(novo.recebimentos) && novo.recebimentos.length &&
       !["cancelada", "rascunho"].includes(situacaoValida)) {
     const recebidoDoItem = (itemId: string) => novo.recebimentos.reduce((s: number, r: any) => {
       const achado = (r.itens || []).find((i: any) => i.itemId === itemId);
@@ -365,9 +372,13 @@ Deno.serve(async (req) => {
         for (const it of itens) {
           if (!it || !it.colecao || !it.registro) continue;
           const atual = it.registro.id ? await lerUm(it.colecao, it.registro.id) : null;
-          const motivo = motivoRecusa(quem, it.colecao, it.registro, atual);
+          // Repõe o que a máscara de leitura tinha tirado, ANTES de comparar e
+          // de gravar: sem isso, o solicitante era recusado por "alterar" um
+          // preço que ele nunca viu — e, se passasse, apagaria esse preço.
+          const reg = reporEscondidos(quem, it.colecao, it.registro, atual);
+          const motivo = motivoRecusa(quem, it.colecao, reg, atual);
           if (motivo) { recusados.push({ colecao: it.colecao, id: it.registro.id, motivo }); continue; }
-          salvos.push(await gravar(it.colecao, it.registro, por));
+          salvos.push(await gravar(it.colecao, reg, por));
         }
         if (recusados.length) {
           await registrarLog({

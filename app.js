@@ -765,14 +765,16 @@ TELAS.config = function (el) {
     '</div>' +
 
     '<div class="grade g2">' +
+      // Não existe mais senha compartilhada: cada pessoa entra com a conta dela
+      // na Central de Acessos. Este cartão troca a SUA senha, pela equipe-auth.
       '<div class="cartao">' +
-        '<h3>🔒 Senha da equipe</h3>' +
-        '<p class="legenda">A senha compartilhada, quem entra por ela entra como <b>Direção</b> e digita o nome à mão. ' +
-        'O caminho recomendado é dar um <a href="#/usuarios">acesso próprio</a> a cada pessoa e guardar esta só com você. ' +
-        'Quem tem o link da empresa não precisa de senha nenhuma.</p>' +
+        '<h3>🔒 Minha senha</h3>' +
+        '<p class="legenda">Vale só para a sua conta. Quem cria e remove acesso das outras pessoas é a ' +
+        '<a href="#/usuarios">Central de Acessos</a>; quem tem o link da empresa não precisa de senha nenhuma.</p>' +
+        '<div class="campo"><label>Senha atual</label><input type="password" id="senhaAtual"></div>' +
         '<div class="campo"><label>Senha nova</label><input type="password" id="senhaNova" placeholder="mínimo 6 letras/números"></div>' +
         '<div class="campo"><label>Repita a senha nova</label><input type="password" id="senhaNova2"></div>' +
-        '<button class="btn primario" id="trocarSenha">Trocar senha</button>' +
+        '<button class="btn primario" id="trocarSenha">Trocar minha senha</button>' +
       '</div>' +
       '<div class="cartao">' +
         '<h3>💾 Backup</h3>' +
@@ -831,19 +833,20 @@ TELAS.config = function (el) {
   document.getElementById('novoDestino').addEventListener('click', () => editarObra(-1));
 
   // Senha
+  // Ia para api('trocarSenha'), case que o nucleo NÃO tem mais desde que as
+  // contas migraram para a Central — devolvia "Ação desconhecida" e quem entrou
+  // com senha temporária ficava sem jeito de trocá-la. A senha é da equipe-auth.
   document.getElementById('trocarSenha').addEventListener('click', async () => {
+    const atual = document.getElementById('senhaAtual').value;
     const a = document.getElementById('senhaNova').value;
     const b = document.getElementById('senhaNova2').value;
+    if (!atual) { toast('Digite a senha atual', 'ruim'); return; }
     if (a.length < 6) { toast('Senha muito curta', 'ruim'); return; }
     if (a !== b) { toast('As duas senhas não são iguais', 'ruim'); return; }
-    const hash = await sha256(a);
     try {
-      await api('trocarSenha', { novaHash: hash });
-      S.senhaHash = hash;
-      localStorage.setItem(K.senha, hash);
-      toast('Senha trocada. Avise a equipe.', 'bom');
-      document.getElementById('senhaNova').value = '';
-      document.getElementById('senhaNova2').value = '';
+      await AUTH.trocarMinhaSenha(atual, a);
+      toast('Senha trocada', 'bom');
+      ['senhaAtual', 'senhaNova', 'senhaNova2'].forEach((id) => { document.getElementById(id).value = ''; });
     } catch (e) { toast(e.message, 'ruim'); }
   });
 
@@ -890,10 +893,14 @@ TELAS.config = function (el) {
     if (!n) return;
     S.quem = n; localStorage.setItem(K.quem, n); toast('Nome salvo', 'bom'); pintarMenu('config');
   });
+  // Só apagava a chave da senha compartilhada, que nem é mais usada: o crachá
+  // continuava no aparelho e a pessoa seguia dentro. Quem identifica é o crachá.
   document.getElementById('sair').addEventListener('click', async () => {
     if (S.fila.length && !await confirmar('Ainda tem ' + S.fila.length + ' item(ns) esperando envio. Sair mesmo assim?', { perigo: true })) return;
+    AUTH.esquecer();
     localStorage.removeItem(K.senha);
-    S.senhaHash = '';
+    S.senhaHash = ''; S.acessoProprio = false; S.usuarioId = ''; S.perfil = 'obra';
+    [K.perfil, K.usuario].forEach((k) => localStorage.removeItem(k));
     render();
   });
 
@@ -1280,7 +1287,11 @@ async function telaVerPublico(args) {
 /* ── Partida ───────────────────────────────────────────────────────────────── */
 lerCache();
 render();
-if (S.senhaHash) puxar();
+// Era `if (S.senhaHash) puxar()` — e S.senhaHash vem da chave da senha
+// compartilhada, que ninguém escreve desde que o login virou crachá. Resultado:
+// o app NUNCA sincronizava ao abrir. Quem chegava de manhã via o cache de
+// ontem até fazer alguma ação que puxasse. Quem identifica hoje é o crachá.
+if (AUTH.temCracha()) puxar();
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }

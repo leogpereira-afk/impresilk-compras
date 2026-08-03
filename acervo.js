@@ -483,7 +483,7 @@ function formularioTreinamento() {
       '</div>' +
       campo('Descrição', areaTexto('descricao', '')) +
       '<div class="campo"><label>Link do vídeo (YouTube, Drive…)</label>' +
-        '<input type="url" name="link" placeholder="https://…">' +
+        '<input type="url" data-campo="link" placeholder="https://…">' +
         '<div class="dica">Vídeo pesa demais para guardar aqui — cole o link. Se for PDF ou apostila, use o arquivo abaixo.</div></div>' +
       '<div class="campo"><label>Ou um arquivo (PDF, apostila)</label>' +
         '<input type="file" id="treinArq"></div>' +

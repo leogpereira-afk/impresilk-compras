@@ -97,14 +97,59 @@ export function cfgSemSegredo(cfg: any) {
 
 export const perfilDe = (quem: Quem | null) => (quem && PERFIS[quem.perfil]) ? quem.perfil : "obra";
 
+// Os campos que a leitura esconde de quem não pode ver preço.
+const CAMPOS_VALOR = ["preco", "total", "totalLiquido", "totalBruto", "desconto", "frete",
+  "valor", "liquido", "bruto", "retencao", "adiantamento", "condicaoPagamento", "banco"];
+
 /* ── O que o solicitante pode mexer em cada coleção ─────────────────────────
    Esconder a tela no menu não protege nada: a porta é o servidor. */
 const CAMPOS_OBRA: Record<string, string[]> = {
-  oc: ["recebimentos", "historico", "situacao", "atualizadoEm", "atualizadoPor"],
+  // 'nf' e 'recebidoEm' são gravados pela MESMA tela de recebimento (o número
+  // da nota que veio na caixa, e a hora em que a entrega fechou completa).
+  // Sem eles aqui, o pacote inteiro era recusado por causa de um campo.
+  oc: ["recebimentos", "historico", "situacao", "nf", "recebidoEm",
+    "atualizadoEm", "atualizadoPor"],
 };
 
 const igual = (a: unknown, b: unknown) =>
   JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+
+/* O solicitante RECEBE o registro sem preço (filtrarLeitura → semValores). Se
+   ele mexe em qualquer coisa e devolve o pacote, os campos escondidos voltam
+   ausentes — e isso quebrava dos dois lados ao mesmo tempo:
+
+     • na comparação, `itens` sem preço != `itens` com preço, e o servidor
+       recusava com 'solicitante não altera "itens" em oc'. Como a fila já tinha
+       tirado a entrada, não havia reenvio: o recebimento (e a foto) se perdia.
+     • se a comparação fosse simplesmente afrouxada, seria pior — em gravar(),
+       `{ ...antigo, ...registro }` sobrescreve `itens` inteiro, e o preço de
+       cada item seria APAGADO do banco pelo celular de quem nem pode vê-lo.
+
+   Então, antes de comparar e antes de gravar, o servidor repõe do registro
+   guardado exatamente o que a máscara tinha tirado. Quem não vê um campo não
+   consegue mudá-lo — nem de propósito, nem sem querer. */
+export function reporEscondidos(quem: Quem | null, colecao: string, registro: any, atual: any): any {
+  const p = PERFIS[perfilDe(quem)];
+  if (!p || p.tudo || !atual) return registro;
+  if (!(p.semPreco || []).includes(colecao)) return registro;
+  return repor(atual, registro);
+}
+
+function repor(guardado: any, veio: any): any {
+  if (Array.isArray(veio)) {
+    // Itens casam por id: a ordem pode mudar, e item novo (sem par) fica como veio.
+    const porId = new Map((Array.isArray(guardado) ? guardado : [])
+      .filter((x: any) => x && x.id).map((x: any) => [x.id, x]));
+    return veio.map((x: any) => (x && x.id && porId.has(x.id)) ? repor(porId.get(x.id), x) : x);
+  }
+  if (!veio || typeof veio !== "object" || !guardado || typeof guardado !== "object") return veio;
+  const saida: any = { ...veio };
+  for (const [k, v] of Object.entries(guardado)) {
+    if (k in veio) saida[k] = repor(v, veio[k]);
+    else if (CAMPOS_VALOR.includes(k)) saida[k] = v;   // sumiu por causa da máscara: volta
+  }
+  return saida;
+}
 
 // Devolve '' quando pode, ou o motivo da recusa.
 export function motivoRecusa(quem: Quem | null, colecao: string, registro: any, atual: any): string {
@@ -140,9 +185,6 @@ export function podeFazer(quem: Quem | null, action: string): boolean {
 }
 
 /* ── Leitura: o celular do solicitante não leva preço para casa ────────────── */
-const CAMPOS_VALOR = ["preco", "total", "totalLiquido", "totalBruto", "desconto", "frete",
-  "valor", "liquido", "bruto", "retencao", "adiantamento", "condicaoPagamento", "banco"];
-
 function semValores(o: any): any {
   if (Array.isArray(o)) return o.map(semValores);
   if (!o || typeof o !== "object") return o;

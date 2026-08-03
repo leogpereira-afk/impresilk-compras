@@ -311,7 +311,7 @@ function ligarBuscaOS(caixaItens, ligarItem) {
   if (!btn) return;
   _osEncontrada = null;
   btn.addEventListener('click', async () => {
-    const campoNum = document.querySelector('#fSC [name="osNumero"]');
+    const campoNum = document.querySelector('#fSC [data-campo="osNumero"]');
     const info = document.getElementById('scOsInfo');
     const numero = String((campoNum && campoNum.value) || '').replace(/\D/g, '');
     if (!numero) { info.innerHTML = '<div class="aviso ruim">Digite o número da O.S.</div>'; return; }
@@ -339,8 +339,8 @@ function ligarBuscaOS(caixaItens, ligarItem) {
           caixaItens.insertAdjacentHTML('beforeend', linhaItem());
           const li = caixaItens.lastElementChild;
           ligarItem(li);
-          const desc = li.querySelector('[name="descricao"]');
-          const qtd = li.querySelector('[name="qtd"]');
+          const desc = li.querySelector('[data-i="descricao"]');
+          const qtd = li.querySelector('[data-i="qtd"]');
           if (desc) desc.value = (i.descricao || '') + (i.medidas ? ' (' + i.medidas + ')' : '');
           if (qtd && i.qtde) qtd.value = i.qtde;
         }
@@ -1242,7 +1242,9 @@ function escolherQuemAvisar(sugestao = {}, texto = '') {
 // WhatsApp de chegada: pergunta para quem vai (agenda + o telefone que o pedido
 // já conhece), manda, e só então oferece guardar o número novo.
 async function avisarChegadaZap(o) {
-  const sc = (o.scId && achar('sc', o.scId)) || null;
+  // A ordem guarda scIds (plural) — uma compra pode atender mais de uma
+  // solicitação. Pega a primeira que ainda existe: é de quem veio o pedido.
+  const sc = (o.scIds || []).map((x) => achar('sc', x)).find(Boolean) || null;
   const ultimo = (o.recebimentos || [])[Math.max(0, (o.recebimentos || []).length - 1)] || {};
   const sugestao = {
     telefone: (sc && sc.solicitante && sc.solicitante.telefone) || (sc && sc.os && sc.os.whatsapp) || (o.os && o.os.whatsapp) || '',

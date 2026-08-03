@@ -26,3 +26,8 @@ jobs:
       # existe passa verde e o clique devolve a pessoa ao painel em silêncio.
       - name: Nenhuma rota morta
         run: node scripts/conferir-rotas.mjs
+
+      # Seletor que procura [name=] onde o helper emite data-campo devolve null
+      # em silêncio: foi assim que a busca de O.S. nunca funcionou.
+      - name: Nenhum seletor apontando para nada
+        run: node scripts/conferir-seletores.mjs

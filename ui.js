@@ -359,7 +359,12 @@ function numeroBR(v) {
 /* ── WhatsApp ──────────────────────────────────────────────────────────────── */
 function linkWhats(telefone, texto) {
   let d = String(telefone || '').replace(/\D/g, '');
-  if (d && !d.startsWith('55')) d = '55' + d;
+  // Decide pelo TAMANHO, não pelo prefixo. Número brasileiro sem DDI tem 10 ou
+  // 11 dígitos; com DDI, 12 ou 13. Testar `startsWith('55')` confundia o DDI
+  // com o DDD 55 (Santa Maria, Uruguaiana e região no RS): o telefone
+  // (55) 99999-8888 já "começava com 55", não ganhava DDI, e a mensagem ia
+  // parar em outro número — sem erro nenhum, a conversa só abria errada.
+  if (d.length === 10 || d.length === 11) d = '55' + d;
   return 'https://wa.me/' + d + '?text=' + encodeURIComponent(texto || '');
 }
 
