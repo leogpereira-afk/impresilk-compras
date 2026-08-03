@@ -1,0 +1,23 @@
+# Confere a sintaxe de todo o JS a cada envio — o app é vanilla (sem build),
+# então um erro de sintaxe só apareceria com a tela branca em produção.
+name: Verificar
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Sintaxe de todos os .js
+        run: |
+          set -e
+          for f in *.js; do node --check "$f"; done
+          echo "sintaxe ok"
