@@ -12,7 +12,7 @@
 //   <id>/p0, p1 → os pedaços
 // ============================================================================
 import { json, preflight } from "../_shared/cors.ts";
-import { identificar, podeFazer } from "../_shared/acesso.ts";
+import { identificarPorCracha, podeFazer } from "../_shared/acesso.ts";
 import {
   agora,
   idNovo,
@@ -51,8 +51,11 @@ Deno.serve(async (req) => {
   if (!TOKEN || (h["x-token"] || body.token) !== TOKEN) return json({ error: "Não autorizado" }, 401);
 
   const cfg = await lerCfgBruta();
-  const eu = await identificar(cfg, h["x-senha"] || body.senha || "");
-  if (!eu) return json({ error: "Senha do painel inválida", semSenha: true }, 403);
+  // Mesma identidade do nucleo: o crachá da Central de Acessos. O acervo guarda
+  // foto de recebimento e projeto — se ele aceitasse outra régua, seria a porta
+  // dos fundos do controle de acesso que o nucleo aplica.
+  const eu = await identificarPorCracha(req);
+  if (!eu) return json({ error: "Entre de novo: sessão inválida ou vencida.", semSenha: true }, 401);
 
   // 'apagar' e 'uso' mexem no acervo inteiro — a mesma régua do nucleo vale
   // aqui, senão o perfil obra ganharia pelo acervo o poder de apagar que o

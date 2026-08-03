@@ -276,7 +276,11 @@ Deno.serve(async (req) => {
   const por = (quem && quem.proprio && quem.nome) ||
     txt(h["x-quem"] ? decodeURIComponent(h["x-quem"]) : (body.por || ""), 60) || "—";
 
-  const PUBLICAS = ["ping", "cfgPublico", "novaSolicitacao", "andamento", "verPublico",
+  // "list"/"getCfg" entram aqui porque quem chama é o BACKUP DO HUB (painel-
+  // backup), servidor-a-servidor com o x-token deste sistema — não há pessoa
+  // logada, logo não há crachá. O x-token é o gate: é secret do Supabase, não
+  // viaja para navegador nenhum além do próprio app.
+  const PUBLICAS = ["ping", "cfgPublico", "list", "getCfg", "novaSolicitacao", "andamento", "verPublico",
     "verCotacao", "responderCotacao", "verPrazos", "responderPrazo",
     "relatarEntrega", "sugerirEtapa"];
   if (!PUBLICAS.includes(action) && !autenticado) return json({ error: "Entre de novo: sessão inválida ou vencida.", semSenha: true }, 401);
@@ -732,6 +736,28 @@ Deno.serve(async (req) => {
       // ── Log e backup ───────────────────────────────────────────────────────
       case "log":
         return json({ ok: true, linhas: await lerLog(body.limite || 200) });
+
+      // ── Protocolo do BACKUP DO HUB (painel-backup) ─────────────────────────
+      // O Painel puxa cada sistema com {action:"list", after} até nextAfter
+      // vir null, e depois {action:"getCfg"}. São as duas únicas ações que ele
+      // conhece — o "backup" logo abaixo é o export manual da própria tela e
+      // devolve tudo de uma vez, o que estouraria o tempo num sistema grande.
+      case "list": {
+        const PASSO = 500;
+        const de = Number(body.after ?? 0) || 0;
+        const { data, error } = await db.from("compras_registros")
+          .select("colecao, id, registro, apagado, atualizado_em")
+          .order("colecao").order("id").range(de, de + PASSO - 1);
+        if (error) throw new Error(error.message);
+        const linhas = (data ?? []).map((l: any) => ({ _col: l.colecao, ...l.registro }));
+        // nextAfter só quando a página veio CHEIA: página parcial é o fim, e
+        // devolver um cursor aqui faria o Painel pedir uma página vazia para
+        // sempre (o laço dele só para quando isto vem null).
+        return json({ ok: true, registros: linhas, nextAfter: linhas.length === PASSO ? de + PASSO : null });
+      }
+
+      case "getCfg":
+        return json({ ok: true, cfg: cfgSemSegredo(cfg) });
 
       case "backup": {
         const registros = await lerTudo(null, NOMES_COLECOES);
