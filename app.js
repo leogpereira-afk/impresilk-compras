@@ -2,7 +2,7 @@
    configurações e as telas públicas (equipe e fornecedor). */
 
 /* ── Rotas ─────────────────────────────────────────────────────────────────── */
-const PUBLICAS = ['solicitar', 'acompanhar', 'ver', 'cotar', 'prazo'];
+const PUBLICAS = ['solicitar', 'acompanhar', 'ver', 'cotar'];
 
 /* ── Perfis de acesso ──────────────────────────────────────────────────────────
    Espelho do que o servidor faz valer (nucleo.mjs). Aqui é só para não mostrar
@@ -426,10 +426,10 @@ TELAS.painel = function (el) {
       }).join('') + '</div>' : '') +
 
     // ── documentos ──
-    (vencendo.length ? '<div class="cartao"><h3>🗂️ Documentos que vencem em breve</h3>' +
+    (vencendo.length ? '<div class="cartao"><h3>📘 Manuais e certidões que vencem</h3>' +
       '<table><tbody>' + vencendo.map((d) => {
         const dias = diasAte(d.validadeEm);
-        return '<tr class="clicavel" data-ir="documentos"><td><b>' + esc(d.tipo) + '</b> ' + esc(d.nome || '') + '</td>' +
+        return '<tr class="clicavel" data-ir="manuais"><td><b>' + esc(d.tipo) + '</b> ' + esc(d.nome || '') + '</td>' +
           '<td class="num">' + fmt.data(d.validadeEm) + '</td>' +
           '<td class="num"><span class="etiqueta ' + (dias < 0 ? 'et-vencido' : 'et-vencendo') + '">' +
           (dias < 0 ? 'vencido' : 'faltam ' + dias + ' dia(s)') + '</span></td></tr>';
@@ -658,7 +658,7 @@ TELAS.config = function (el) {
       '<p class="legenda">Para onde o material vai: produção, estoque ou instalação em cliente. Toda solicitação e compra pertence a um destino.</p>' +
       '<table><thead><tr><th>Destino</th><th>Endereço</th><th></th></tr></thead><tbody>' +
       (cfg.obras || []).map((o, i) =>
-        '<tr><td><b>' + esc(o.nome) + '</b>' + (o.ativa === false ? ' <span class="etiqueta">inativa</span>' : '') + '</td>' +
+        '<tr><td><b>' + esc(o.nome) + '</b>' + (o.ativa === false ? ' <span class="etiqueta">desativado</span>' : '') + '</td>' +
         '<td>' + esc(o.endereco || '—') + '</td>' +
         '<td class="num"><button class="btn pequeno" data-obra="' + i + '">Editar</button></td></tr>').join('') +
       '</tbody></table>' +

@@ -47,9 +47,10 @@ const CFG_PADRAO = {
   // "obras" virou o DESTINO da compra (a chave do dado ficou obraId de propósito:
   // renomear identificador que já roda em produção é como nascem bugs de porte).
   obras: [
-    { id: "fabrica", nome: "Fábrica / produção", endereco: "", ativa: true },
+    { id: "producao", nome: "Produção (fábrica)", endereco: "", ativa: true },
+    { id: "estoque", nome: "Estoque", endereco: "", ativa: true },
+    { id: "instalacao", nome: "Instalação em cliente", endereco: "", ativa: true },
     { id: "escritorio", nome: "Escritório", endereco: "", ativa: true },
-    { id: "instalacao", nome: "Instalação em campo", endereco: "", ativa: true },
   ],
   setores: ["Impressão digital", "Recorte / plotter", "Marcenaria e ACM", "Serralheria",
     "Letra caixa", "Elétrica e LED", "Acabamento", "Instalação", "Escritório",
@@ -233,7 +234,7 @@ function limparSolicitacao(r: any) {
     obs: txt(it.obs, 200),
   })).filter((it: any) => it.descricao);
   return {
-    obraId: txt(r.obraId, 40) || "fabrica",
+    obraId: txt(r.obraId, 40) || "producao",
     obra: txt(r.obra, 120),
     solicitante: {
       nome: txt(r.solicitante && r.solicitante.nome, 80),

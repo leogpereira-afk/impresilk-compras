@@ -654,7 +654,7 @@ function editorOC(el, id, scId) {
       '</div>' +
 
       '<div class="cartao">' +
-        '<h3>🧱 Itens</h3>' +
+        '<h3>📋 Itens</h3>' +
         '<div id="itensOC" data-recalcula="1">' + oc.itens.map((i) => linhaItem(i, true)).join('') + '</div>' +
         '<div class="barra-acoes">' +
           '<button class="btn pequeno" id="maisItem">+ Item</button>' +

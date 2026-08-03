@@ -21,3 +21,8 @@ jobs:
           set -e
           for f in *.js; do node --check "$f"; done
           echo "sintaxe ok"
+
+      # node --check só vê sintaxe. Um data-ir apontando para tela que não
+      # existe passa verde e o clique devolve a pessoa ao painel em silêncio.
+      - name: Nenhuma rota morta
+        run: node scripts/conferir-rotas.mjs
