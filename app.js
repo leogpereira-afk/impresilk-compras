@@ -856,7 +856,7 @@ function editarObra(i) {
         if (i >= 0) obras[i] = nova; else obras.push(nova);
         try {
           const r = await api('salvarCfg', { cfg: Object.assign({}, S.cfg, { obras }) });
-          S.cfg = r.cfg; gravarCache(); fecharModal(); render(); toast('Obra salva', 'bom');
+          S.cfg = r.cfg; gravarCache(); fecharModal(); render(); toast('Destino salvo', 'bom');
         } catch (e) { toast(e.message, 'ruim'); }
       } }
     ]

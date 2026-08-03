@@ -57,7 +57,7 @@ TELAS.cotacoes = function (el, args) {
     '<button class="btn primario" id="novaCot">+ Nova cotação</button>');
 
   el.innerHTML =
-    '<div class="aviso info">Três preços antes de comprar é o que mais economiza dinheiro numa obra. ' +
+    '<div class="aviso info">Três preços antes de comprar é o que mais economiza dinheiro. ' +
     'Aqui você manda o pedido de preço no WhatsApp e o fornecedor responde sozinho, sem você redigitar nada.</div>' +
     '<div class="cartao">' +
       (todas.length ?
@@ -535,7 +535,7 @@ async function telaCotarPublico(args) {
   molduraPublica(
     '<div class="cartao">' +
       '<h2>Pedido de cotação ' + esc(c.codigo) + '</h2>' +
-      '<p class="legenda">' + esc(r.empresa.nome) + ' · obra ' + esc(c.obra) +
+      '<p class="legenda">' + esc(r.empresa.nome) + ' · ' + esc(c.obra) +
         (c.prazoResposta ? ' · responder até ' + fmt.data(c.prazoResposta) : '') + '</p>' +
       (c.observacoes ? '<div class="aviso info">' + esc(c.observacoes) + '</div>' : '') +
       (jaRespondeu ? '<div class="aviso bom">Você já respondeu ' + fmt.quando(meu.respondidoEm) +

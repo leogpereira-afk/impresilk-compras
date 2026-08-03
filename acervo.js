@@ -110,7 +110,7 @@ TELAS.catalogos = function (el) {
   el.innerHTML =
     '<div class="filtros">' +
       '<input type="search" id="pjBusca" placeholder="Buscar catálogo…" value="' + esc(filtro.busca) + '">' +
-      '<select id="pjObra"><option value="">Todas as obras</option>' +
+      '<select id="pjObra"><option value="">Todos os destinos</option>' +
         obras().map((o) => '<option value="' + esc(o.id) + '"' + (filtro.obra === o.id ? ' selected' : '') + '>' + esc(o.nome) + '</option>').join('') +
       '</select>' +
       '<select id="pjDisc"><option value="">Todas as linhas</option>' +
@@ -336,7 +336,7 @@ TELAS.manuais = function (el) {
             (d.arquivoId ? '<button class="btn pequeno primario" data-dbaixar="' + esc(d.id) + '">Baixar</button> ' : '') +
             (podeMexer ? '<button class="btn pequeno" data-deditar="' + esc(d.id) + '">Editar</button>' : '') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>').join('')
-      : '<div class="cartao">' + vazio('🗂️', 'Nenhum documento', 'Guarde CNPJ, contrato social, alvará e certidões aqui — ' +
+      : '<div class="cartao">' + vazio('🗂️', 'Nenhum documento', 'Guarde ficha técnica, manual de máquina, CNPJ e certidões aqui — ' +
         'assim ninguém mais procura em pasta de e-mail.') + '</div>');
 
   const bnd = document.getElementById('novoDoc');
@@ -375,7 +375,7 @@ function editarDocumento(id, arquivo) {
         campo('Pertence a', seletor('obraId', d.obraId || 'empresa', opcoesObra)) +
       '</div>' +
       '<div class="linha">' +
-        campo('Nome / descrição', entrada('nome', d.nome, { placeholder: 'Ex.: Alvará de construção' })) +
+        campo('Nome / descrição', entrada('nome', d.nome, { placeholder: 'Ex.: Ficha técnica do vinil' })) +
         campo('Número', entrada('numero', d.numero)) +
       '</div>' +
       '<div class="linha">' +

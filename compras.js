@@ -200,14 +200,14 @@ TELAS.solicitacoes = function (el, args) {
         ['nova', 'aprovada', 'em_cotacao', 'em_compra', 'recusada', 'atendida'].map((s) =>
           '<option value="' + s + '"' + (filtro.situacao === s ? ' selected' : '') + '>' + esc(SITUACOES[s].txt) + '</option>').join('') +
       '</select>' +
-      '<select id="fObra"><option value="">Todas as obras</option>' +
+      '<select id="fObra"><option value="">Todos os destinos</option>' +
         obras().map((o) => '<option value="' + esc(o.id) + '"' + (filtro.obra === o.id ? ' selected' : '') + '>' + esc(o.nome) + '</option>').join('') +
       '</select>' +
     '</div>' +
     '<div class="cartao">' +
       (filtradas.length ?
         '<div class="tabela-rolagem"><table><thead><tr>' +
-          '<th>Nº</th><th>Quem pediu</th><th>Obra / setor</th><th>Itens</th><th>Situação</th><th>Quando</th>' +
+          '<th>Nº</th><th>Quem pediu</th><th>Destino / setor</th><th>Itens</th><th>Situação</th><th>Quando</th>' +
         '</tr></thead><tbody>' +
         filtradas.map((s) =>
           '<tr class="clicavel" data-id="' + esc(s.id) + '">' +
@@ -264,7 +264,7 @@ function novaSolicitacaoInterna() {
       '</div>' +
       '<div class="linha">' +
         campo('Quem está pedindo', entrada('solicitante.nome', S.quem)) +
-        campo('Urgência', seletor('urgencia', 'normal', [{ v: 'normal', t: 'Normal' }, { v: 'urgente', t: 'Urgente' }, { v: 'critica', t: 'Parou a obra' }])) +
+        campo('Urgência', seletor('urgencia', 'normal', [{ v: 'normal', t: 'Normal' }, { v: 'urgente', t: 'Urgente' }, { v: 'critica', t: 'Parou a produção' }])) +
       '</div>' +
       '<h3>Itens</h3><div id="itensSC">' + linhaItem() + linhaItem() + '</div>' +
       '<button class="btn pequeno" id="maisItemSC">+ Item</button>' +
@@ -638,7 +638,7 @@ function editorOC(el, id, scId) {
           campo('Entrega prevista', entrada('entregaPrevista', oc.entregaPrevista, { tipo: 'date' })) +
         '</div>' +
         '<div class="linha">' +
-          campo('Local de entrega', entrada('localEntrega', oc.localEntrega, { placeholder: 'Canteiro da empresa' })) +
+          campo('Local de entrega', entrada('localEntrega', oc.localEntrega, { placeholder: 'Ex.: fábrica — Rua X, 100' })) +
           campo('Prazo de entrega', entrada('prazoEntrega', oc.prazoEntrega, { placeholder: 'Ex.: 10 dias úteis' })) +
           campo('Validade da proposta', entrada('validadeProposta', oc.validadeProposta, { placeholder: 'Ex.: 15 dias' })) +
         '</div>' +

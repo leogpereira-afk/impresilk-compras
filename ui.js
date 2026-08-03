@@ -102,9 +102,6 @@ const SITUACOES = {
   parcial: { txt: 'Recebida em parte', cls: 'et-parcial' },
   entregue: { txt: 'Entregue', cls: 'et-entregue' },
   cancelada: { txt: 'Cancelada', cls: 'et-cancelada' },
-  // ordem de serviço
-  andamento: { txt: 'Em andamento', cls: 'et-transito' },
-  concluida: { txt: 'Concluída', cls: 'et-concluida' }
 };
 
 const etiqueta = (s) => {
@@ -115,7 +112,7 @@ const etiqueta = (s) => {
 const URGENCIAS = {
   normal: { txt: 'Normal', cls: '' },
   urgente: { txt: 'Urgente', cls: 'et-urgente' },
-  critica: { txt: 'Parou a obra', cls: 'et-critica' }
+  critica: { txt: 'Parou a produção', cls: 'et-critica' }
 };
 const etiquetaUrgencia = (u) => {
   const e = URGENCIAS[u] || URGENCIAS.normal;
