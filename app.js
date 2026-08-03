@@ -263,7 +263,7 @@ function telaEntrar() {
       '</div>' +
       '<div class="cartao">' +
         '<h3>Fornecedor?</h3>' +
-        '<p class="legenda">Cotações e confirmações de entrega chegam por link direto — não precisa de login.</p>' +
+        '<p class="legenda">Cotações e ordens de compra chegam por link direto — não precisa de login.</p>' +
       '</div>' +
     '</div></div>';
 
@@ -945,7 +945,7 @@ async function telaSolicitar() {
         campo('Destino', '<select id="pObra">' + cfg.obras.map((o) => '<option value="' + esc(o.id) + '">' + esc(o.nome) + '</option>').join('') + '</select>') +
       '</div>' +
       '<div class="linha">' +
-        campo('Setor / etapa', '<select id="pSetor">' + cfg.setores.map((s) => '<option>' + esc(s) + '</option>').join('') + '</select>') +
+        campo('Setor', '<select id="pSetor">' + cfg.setores.map((s) => '<option>' + esc(s) + '</option>').join('') + '</select>') +
         campo('Precisa até', '<input type="date" id="pData" value="' + esc(hojeISO()) + '">') +
       '</div>' +
       campo('Urgência',
