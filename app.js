@@ -630,16 +630,6 @@ TELAS.acessos = function (el) {
 };
 
 /* ── Configurações ─────────────────────────────────────────────────────────── */
-/* ══════════════════════════════════════════════════════════════════════════
-   ACESSOS DA EQUIPE — uma senha por pessoa
-   Com a senha única, o histórico dizia só o nome que a pessoa digitou no login
-   (qualquer um podia digitar qualquer nome) e desligar alguém obrigava a trocar
-   a senha de todo mundo. Com acesso próprio, o nome vem do cadastro e desligar
-   é um clique.
-   ══════════════════════════════════════════════════════════════════════════ */
-const usuariosApp = () => ((S.cfg && S.cfg.usuarios) || []).slice()
-  .sort((a, b) => (a.ativo === false ? 1 : 0) - (b.ativo === false ? 1 : 0) ||
-    String(a.nome || '').localeCompare(String(b.nome || '')));
 
 /* ── Acessos da equipe (dentro de Configurações) ────────────────────────────
    As contas moram na CENTRAL DE ACESSOS (equipe-auth) — o mesmo login do Brief
