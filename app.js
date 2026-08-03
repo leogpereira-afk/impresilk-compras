@@ -18,13 +18,15 @@ const PERFIS_APP = {
     desc: 'O dia a dia inteiro de compras: cota, negocia, emite ordem e cobra o ' +
       'fornecedor. Não cria acessos, não mexe nas configurações e não esvazia a lixeira.',
     telas: ['painel', 'solicitacoes', 'cotacoes', 'compras', 'recebimento',
-      'fornecedores', 'catalogos', 'manuais', 'treinamentos', 'acessos', 'usuarios']
+      'fornecedores', 'catalogos', 'manuais', 'treinamentos', 'acessos', 'config']
   },
   obra: {
     txt: 'Solicitante (produção / instalação)',
     desc: 'Pede material, registra o recebimento e consulta catálogo, manual e ' +
       'treinamento. Não aprova compra, não vê preço de cotação e não apaga nada.',
-    telas: ['painel', 'solicitacoes', 'recebimento', 'catalogos', 'manuais', 'treinamentos', 'usuarios']
+    // 'config' entra para TODOS: era por ali que a pessoa trocava a própria
+    // senha, e a tela mostra a cada perfil só os cartões que são dele.
+    telas: ['painel', 'solicitacoes', 'recebimento', 'catalogos', 'manuais', 'treinamentos', 'config']
   }
 };
 
@@ -59,10 +61,9 @@ const MENU = [
   { rota: 'manuais', icone: '📘', texto: 'Manuais', bolha: () => docsVencendo(30).length },
   { rota: 'treinamentos', icone: '🎓', texto: 'Treinamentos' },
   { grupo: 'Sistema' },
-  // Para a direção é a tela de criar acesso; para os outros, só a própria senha.
-  { rota: 'usuarios', icone: '👤', texto: () => ehDirecao() ? 'Acessos da equipe' : 'Minha senha',
-    bolha: () => ehDirecao() ? ((S.cfg && S.cfg.usuarios) || []).filter((u) => u.ativo !== false).length : 0 },
   { rota: 'acessos', icone: '🔑', texto: 'Links para fornecedor' },
+  // Os acessos da equipe moram DENTRO de Configurações: é configuração, e o
+  // menu antes prometia "Minha senha" e abria a tela de gerenciar todo mundo.
   { rota: 'config', icone: '⚙️', texto: 'Configurações' }
 ];
 
@@ -640,30 +641,81 @@ const usuariosApp = () => ((S.cfg && S.cfg.usuarios) || []).slice()
   .sort((a, b) => (a.ativo === false ? 1 : 0) - (b.ativo === false ? 1 : 0) ||
     String(a.nome || '').localeCompare(String(b.nome || '')));
 
-TELAS.usuarios = function (el) {
-  // As contas moram na CENTRAL DE ACESSOS (equipe-auth) — o mesmo login do
-  // Brief e do PCP. Esta tela lista e cria dali; senha nunca passa por aqui.
-  cabecalho('Acessos da equipe', 'Contas do Compras na Central de Acessos');
-  el.innerHTML = '<div class="cartao"><div id="listaContas"><p class="legenda">Carregando contas…</p></div>' +
+/* ── Acessos da equipe (dentro de Configurações) ────────────────────────────
+   As contas moram na CENTRAL DE ACESSOS (equipe-auth) — o mesmo login do Brief
+   e do PCP. Daqui só se lista, cria e remove; senha nunca passa por este app.
+
+   Era uma tela própria no menu. Virou cartão de Configurações porque é
+   configuração, e porque o menu mostrava "Minha senha" para quem não é direção
+   e abria a tela de gerenciar TODO MUNDO — que o servidor recusa. Agora quem
+   não é direção abre Configurações e vê só o que é dele. */
+/* Os dois desenhos de Configurações (direção e o resto) mostram os mesmos dois
+   cartões de "minha senha" e "este aparelho" — então os ouvintes moram aqui, um
+   lugar só. Duplicar isso é como um lado sai consertado e o outro não. */
+function ligarSenhaEAparelho(el) {
+  const bs = document.getElementById('trocarSenha');
+  if (bs) bs.addEventListener('click', async () => {
+    const atual = document.getElementById('senhaAtual').value;
+    const a = document.getElementById('senhaNova').value;
+    const b = document.getElementById('senhaNova2').value;
+    if (!atual) { toast('Digite a senha atual', 'ruim'); return; }
+    if (a.length < 6) { toast('Senha muito curta', 'ruim'); return; }
+    if (a !== b) { toast('As duas senhas não são iguais', 'ruim'); return; }
+    try {
+      // A senha é da equipe-auth (Central de Acessos), não deste app.
+      await AUTH.trocarMinhaSenha(atual, a);
+      toast('Senha trocada', 'bom');
+      ['senhaAtual', 'senhaNova', 'senhaNova2'].forEach((id) => { document.getElementById(id).value = ''; });
+    } catch (e) { toast(e.message, 'ruim'); }
+  });
+
+  const bn = document.getElementById('salvarNome');
+  if (bn) bn.addEventListener('click', () => {
+    const n = document.getElementById('meuNome').value.trim();
+    if (!n) return;
+    S.quem = n; localStorage.setItem(K.quem, n); toast('Nome salvo', 'bom'); pintarMenu('config');
+  });
+
+  // Só apagava a chave da senha compartilhada, que nem é mais usada: o crachá
+  // continuava no aparelho e a pessoa seguia dentro. Quem identifica é o crachá.
+  const bx = document.getElementById('sair');
+  if (bx) bx.addEventListener('click', async () => {
+    if (S.fila.length && !await confirmar('Ainda tem ' + S.fila.length + ' item(ns) esperando envio. Sair mesmo assim?', { perigo: true })) return;
+    AUTH.esquecer();
+    localStorage.removeItem(K.senha);
+    S.senhaHash = ''; S.acessoProprio = false; S.usuarioId = ''; S.perfil = 'obra';
+    [K.perfil, K.usuario].forEach((k) => localStorage.removeItem(k));
+    render();
+  });
+}
+
+function cartaoAcessosEquipe() {
+  return '<div class="cartao">' +
+    '<h3>👥 Acessos da equipe</h3>' +
+    '<p class="legenda">Contas do Compras na Central de Acessos. ' +
+    'Papéis: <b>admin</b> aprova e configura · <b>comprador</b> cota e emite ordens · ' +
+    '<b>solicitante</b> pede material e registra recebimento. A conta vale só para o Compras; ' +
+    'Brief e PCP têm as suas na mesma Central.</p>' +
+    '<div id="listaContas"><p class="legenda">Carregando contas…</p></div>' +
     '<div class="barra-acoes" style="margin-top:10px">' +
       '<button class="btn primario" id="novaConta">+ Criar acesso</button>' +
-    '</div>' +
-    '<p class="legenda" style="margin-top:10px">Papéis: <b>admin</b> aprova e configura · <b>comprador</b> cota e emite ordens · ' +
-    '<b>solicitante</b> pede material e registra recebimento. A conta vale só para o Compras; ' +
-    'Brief e PCP têm as suas na mesma Central.</p></div>';
+    '</div></div>';
+}
 
+function ligarAcessosEquipe() {
   const desenhar = async () => {
     const caixa = document.getElementById('listaContas');
+    if (!caixa) return;
     try {
       const r = await AUTH.listarContas();
       const contas = r.contas || r.lista || [];
       caixa.innerHTML = contas.length
-        ? '<table><thead><tr><th>Usuário</th><th>Nome</th><th>Papel</th><th>Situação</th><th></th></tr></thead><tbody>' +
+        ? '<div class="tabela-rolagem"><table><thead><tr><th>Usuário</th><th>Nome</th><th>Papel</th><th>Situação</th><th></th></tr></thead><tbody>' +
           contas.map((c) => '<tr><td>' + esc(c.usuario) + '</td><td>' + esc(c.nome || '—') + '</td>' +
             '<td>' + esc(c.papel || '—') + '</td>' +
             '<td>' + (c.ativo === false ? '<span class="etiqueta et-cancelada">desativado</span>' : '<span class="etiqueta et-entregue">ativo</span>') + '</td>' +
             '<td class="num"><button class="btn pequeno" data-remover="' + esc(c.usuario) + '">Remover</button></td></tr>').join('') +
-          '</tbody></table>'
+          '</tbody></table></div>'
         : '<p class="legenda">Nenhuma conta ainda — crie a primeira.</p>';
       caixa.querySelectorAll('[data-remover]').forEach((b) => b.addEventListener('click', async () => {
         if (!await confirmar('Remover o acesso de "' + b.dataset.remover + '" ao Compras?', { perigo: true, ok: 'Remover' })) return;
@@ -677,7 +729,8 @@ TELAS.usuarios = function (el) {
   };
   desenhar();
 
-  document.getElementById('novaConta').addEventListener('click', () => {
+  const bn = document.getElementById('novaConta');
+  if (bn) bn.addEventListener('click', () => {
     abrirModal({
       titulo: 'Criar acesso ao Compras',
       corpo: '<div id="fConta">' +
@@ -702,14 +755,40 @@ TELAS.usuarios = function (el) {
       ]
     });
   });
-};
+}
 
 TELAS.config = function (el) {
   const cfg = S.cfg || {};
   const emp = cfg.empresa || {};
   const ass = cfg.assinaturas || {};
-  cabecalho('Configurações', 'Empresa, destinos e backup', '');
+  // Quem não é direção abre esta tela só para trocar a própria senha e ajustar
+  // o nome do aparelho — o resto é dela e o servidor recusaria de qualquer jeito.
+  const manda = ehDirecao();
+  cabecalho('Configurações',
+    manda ? 'Empresa, destinos, acessos e backup' : 'Sua senha e este aparelho', '');
   S.formAberto = true;
+
+  if (!manda) {
+    el.innerHTML =
+      '<div class="cartao">' +
+        '<h3>🔒 Minha senha</h3>' +
+        '<p class="legenda">Vale só para a sua conta, na Central de Acessos. ' +
+        'Quem cria e remove acesso das outras pessoas é a direção.</p>' +
+        '<div class="campo"><label>Senha atual</label><input type="password" id="senhaAtual"></div>' +
+        '<div class="campo"><label>Senha nova</label><input type="password" id="senhaNova" placeholder="mínimo 6 letras/números"></div>' +
+        '<div class="campo"><label>Repita a senha nova</label><input type="password" id="senhaNova2"></div>' +
+        '<button class="btn primario" id="trocarSenha">Trocar minha senha</button>' +
+      '</div>' +
+      '<div class="cartao">' +
+        '<h3>👤 Este aparelho</h3>' +
+        '<div class="linha"><div class="campo"><label>Seu nome</label>' +
+          '<input type="text" id="meuNome" value="' + esc(S.quem) + '"></div></div>' +
+        '<div class="barra-acoes"><button class="btn" id="salvarNome">Salvar nome</button>' +
+        '<button class="btn perigo" id="sair">Sair do painel neste aparelho</button></div>' +
+      '</div>';
+    ligarSenhaEAparelho(el);
+    return;
+  }
 
   el.innerHTML =
     '<div class="cartao" id="cEmpresa">' +
@@ -770,12 +849,13 @@ TELAS.config = function (el) {
       '<div class="cartao">' +
         '<h3>🔒 Minha senha</h3>' +
         '<p class="legenda">Vale só para a sua conta. Quem cria e remove acesso das outras pessoas é a ' +
-        '<a href="#/usuarios">Central de Acessos</a>; quem tem o link da empresa não precisa de senha nenhuma.</p>' +
+        'direção, no cartão "Acessos da equipe"; quem tem o link da empresa não precisa de senha nenhuma.</p>' +
         '<div class="campo"><label>Senha atual</label><input type="password" id="senhaAtual"></div>' +
         '<div class="campo"><label>Senha nova</label><input type="password" id="senhaNova" placeholder="mínimo 6 letras/números"></div>' +
         '<div class="campo"><label>Repita a senha nova</label><input type="password" id="senhaNova2"></div>' +
         '<button class="btn primario" id="trocarSenha">Trocar minha senha</button>' +
       '</div>' +
+      cartaoAcessosEquipe() +
       '<div class="cartao">' +
         '<h3>💾 Backup</h3>' +
         '<p class="legenda">Uma cópia de tudo é guardada sozinha todo dia no servidor (60 dias de histórico). Aqui você baixa uma cópia para o seu computador.</p>' +
@@ -832,23 +912,8 @@ TELAS.config = function (el) {
   el.querySelectorAll('[data-obra]').forEach((b) => b.addEventListener('click', () => editarObra(Number(b.dataset.obra))));
   document.getElementById('novoDestino').addEventListener('click', () => editarObra(-1));
 
-  // Senha
-  // Ia para api('trocarSenha'), case que o nucleo NÃO tem mais desde que as
-  // contas migraram para a Central — devolvia "Ação desconhecida" e quem entrou
-  // com senha temporária ficava sem jeito de trocá-la. A senha é da equipe-auth.
-  document.getElementById('trocarSenha').addEventListener('click', async () => {
-    const atual = document.getElementById('senhaAtual').value;
-    const a = document.getElementById('senhaNova').value;
-    const b = document.getElementById('senhaNova2').value;
-    if (!atual) { toast('Digite a senha atual', 'ruim'); return; }
-    if (a.length < 6) { toast('Senha muito curta', 'ruim'); return; }
-    if (a !== b) { toast('As duas senhas não são iguais', 'ruim'); return; }
-    try {
-      await AUTH.trocarMinhaSenha(atual, a);
-      toast('Senha trocada', 'bom');
-      ['senhaAtual', 'senhaNova', 'senhaNova2'].forEach((id) => { document.getElementById(id).value = ''; });
-    } catch (e) { toast(e.message, 'ruim'); }
-  });
+  ligarSenhaEAparelho(el);
+  ligarAcessosEquipe();
 
   // Backup / log
   document.getElementById('baixarBackup').addEventListener('click', async () => {
@@ -886,23 +951,6 @@ TELAS.config = function (el) {
       .then(() => toast('Copiado', 'bom'))
       .catch(() => toast('Não consegui copiar. O link é: ' + url, 'ruim'));
   }));
-
-  // Aparelho
-  document.getElementById('salvarNome').addEventListener('click', () => {
-    const n = document.getElementById('meuNome').value.trim();
-    if (!n) return;
-    S.quem = n; localStorage.setItem(K.quem, n); toast('Nome salvo', 'bom'); pintarMenu('config');
-  });
-  // Só apagava a chave da senha compartilhada, que nem é mais usada: o crachá
-  // continuava no aparelho e a pessoa seguia dentro. Quem identifica é o crachá.
-  document.getElementById('sair').addEventListener('click', async () => {
-    if (S.fila.length && !await confirmar('Ainda tem ' + S.fila.length + ' item(ns) esperando envio. Sair mesmo assim?', { perigo: true })) return;
-    AUTH.esquecer();
-    localStorage.removeItem(K.senha);
-    S.senhaHash = ''; S.acessoProprio = false; S.usuarioId = ''; S.perfil = 'obra';
-    [K.perfil, K.usuario].forEach((k) => localStorage.removeItem(k));
-    render();
-  });
 
   document.getElementById('esvaziar').addEventListener('click', async () => {
     if (!await confirmar('Apagar DE VEZ tudo que está na lixeira? Isso não tem volta.', { perigo: true, ok: 'Apagar de vez' })) return;
