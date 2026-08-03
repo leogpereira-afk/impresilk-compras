@@ -241,7 +241,7 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 .progresso { height: 7px; background: var(--cinza-claro); border-radius: 999px; overflow: hidden; }
 .progresso i { display: block; height: 100%; background: var(--azul); width: 0; transition: width .2s; }
 
-/* ── Telas públicas (obra e fornecedor) ────────────────────────────────────── */
+/* ── Telas públicas (equipe e fornecedor) ─────────────────────────────────── */
 .publico { min-height: 100vh; background: linear-gradient(180deg, var(--azul) 0 210px, var(--fundo) 210px); padding: 26px 16px 60px; }
 .publico .caixa { max-width: 760px; margin: 0 auto; }
 .publico .marca-topo { text-align: center; margin-bottom: 18px; }
@@ -310,9 +310,10 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 .arquivo-solto.clicavel { cursor: pointer; }
 .arquivo-solto.clicavel:hover { border-color: var(--azul); }
 
-/* ── Grade da medição ──────────────────────────────────────────────────────── */
-/* No computador é uma tabela; no celular cada etapa vira um cartão, porque a
-   medição é feita andando pela obra, com o telefone na mão. */
+/* ── Grade de preços da cotação ────────────────────────────────────────────── */
+/* Os nomes de classe "medicao" e "med-" vieram do porte e ficaram: renomear
+   classe que já roda em produção é risco à toa. No computador é uma tabela; no
+   celular cada item vira um cartão, porque o fornecedor responde pelo telefone. */
 .medicao-grade { margin-top: 6px; }
 .med-cab, .med-linha {
   display: grid; grid-template-columns: 1fr 90px 120px 120px; gap: 10px; align-items: center;

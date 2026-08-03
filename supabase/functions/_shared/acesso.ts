@@ -40,7 +40,7 @@ export const PERFIS: Record<string, {
     txt: "Solicitante",
     tudo: false,
     escreve: ["sc", "oc"],
-    le: ["sc", "oc", "forn", "doc", "proj", "trein"],
+    le: ["sc", "oc", "forn", "equipe", "doc", "proj", "trein"],
     semPreco: ["oc", "cot"],
   },
 };

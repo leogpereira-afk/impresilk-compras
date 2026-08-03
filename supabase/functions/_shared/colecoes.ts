@@ -11,6 +11,9 @@ export const COLECOES: Record<string, { pre: string; nome: string }> = {
   cot:   { pre: "CT", nome: "Cotação" },
   oc:    { pre: "OC", nome: "Ordem de compra" },
   forn:  { pre: "",   nome: "Fornecedor" },
+  // Quem pede material dentro da empresa. Existe para o WhatsApp de chegada não
+  // depender de alguém digitar o número de novo a cada pedido.
+  equipe: { pre: "",   nome: "Pessoa da equipe" },
   // Acervo. A CHAVE ficou como nasceu no porte da Domo; o RÓTULO é o da
   // comunicação visual. Renomear a chave obrigaria a migrar dado por estética.
   doc:   { pre: "",   nome: "Manual" },

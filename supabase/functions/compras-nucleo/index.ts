@@ -142,7 +142,7 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
 
   // A situação de uma ordem de compra é DECIDIDA AQUI, depois de juntar os
   // recebimentos dos dois aparelhos. Cada celular só enxerga os recebimentos
-  // que ele mesmo conhece: se o almoxarife registra 40 e o engenheiro 80 de um
+  // que ele mesmo conhece: se o estoque registra 40 e o comprador 80 de um
   // pedido de 120, nenhum dos dois via "entregue" — a conta é do servidor.
   //
   // A situação que MANDA é a guardada, não a que veio do navegador: um modal de
@@ -184,7 +184,7 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
           sc.situacao = "atendida";
           sc.historico = unirPorId(sc.historico, [{
             id: idNovo(), em: agora(), por: por || "—",
-            o_que: "Material recebido na obra (" + (novo.codigo || "") + ")",
+            o_que: "Material recebido (" + (novo.codigo || "") + ")",
           }]);
           sc.atualizadoEm = agora();
           await gravarUm("sc", sid, sc);
@@ -341,7 +341,7 @@ Deno.serve(async (req) => {
       // Tudo que o painel precisa numa requisição só.
       case "snapshot": {
         const todos = await lerTudo(body.colecoes || null, NOMES_COLECOES);
-        // O celular da obra não leva preço nem contrato para casa: o cache fica
+        // O celular do solicitante não leva preço nem contrato para casa: o cache fica
         // em texto no aparelho e sobrevive ao desligamento do acesso.
         const registros = filtrarLeitura(quem, todos);
         const cfgSaida = cfgSemSegredo(cfg);
@@ -352,7 +352,7 @@ Deno.serve(async (req) => {
         });
       }
 
-      // Recusa item a item, NUNCA o pacote inteiro: o almoxarife manda o
+      // Recusa item a item, NUNCA o pacote inteiro: quem recebe manda o
       // recebimento e a solicitação no mesmo lote, e barrar tudo por causa de
       // um item fazia o app descartar o recebimento junto — trabalho de uma
       // manhã inteira sumindo por causa de uma linha proibida.
@@ -438,13 +438,13 @@ Deno.serve(async (req) => {
         return json({ ok: true, registro: r });
       }
 
-      // ── PÚBLICO: a obra pede material sem senha ─────────────────────────────
+      // ── PÚBLICO: a equipe pede material sem senha ───────────────────────────
       case "novaSolicitacao": {
         const limpo: any = limparSolicitacao(body.registro || {});
         if (!limpo.solicitante.nome) return json({ ok: false, error: "Informe seu nome" }, 400);
         if (!limpo.itens.length) return json({ ok: false, error: "Inclua pelo menos um item" }, 400);
         const autor = limpo.solicitante.nome;
-        limpo.historico = [{ id: idNovo(), em: agora(), por: autor, o_que: "Solicitação registrada pelo link da obra" }];
+        limpo.historico = [{ id: idNovo(), em: agora(), por: autor, o_que: "Solicitação registrada pelo link público" }];
         const salvo = await gravar("sc", limpo, autor);
         await registrarLog({ acao: "nova solicitação", por: autor, codigo: salvo.codigo, obra: salvo.obra });
         return json({ ok: true, codigo: salvo.codigo, id: salvo.id, numero: salvo.numero });

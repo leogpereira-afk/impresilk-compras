@@ -5,7 +5,7 @@
 // Porte de netlify/functions/acervo.mjs. MANTÉM o protocolo em partes que o
 // cliente já usa (iniciar → parte → finalizar → baixarParte): o limite de corpo
 // de uma Edge Function é parecido com o do Netlify, e trocar o protocolo
-// obrigaria a reescrever o upload do app — que funciona no 4G da obra e já foi
+// obrigaria a reescrever o upload do app — que funciona no 4G da rua e já foi
 // testado. As partes viram objetos no bucket "arquivos" do Storage:
 //
 //   <id>/meta   → metadados (na tabela registros, coleção interna "_arqmeta")
@@ -27,7 +27,7 @@ import {
 } from "../_shared/dados.ts";
 
 // Coleção interna: guarda o "meta" de cada arquivo (nome, tamanho, partes).
-// Não aparece em COLECOES porque não é dado de obra — é encanamento.
+// Não aparece em COLECOES porque não é dado do negócio — é encanamento.
 const META = "_arqmeta";
 
 const b64ParaBytes = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
@@ -58,7 +58,7 @@ Deno.serve(async (req) => {
   if (!eu) return json({ error: "Entre de novo: sessão inválida ou vencida.", semSenha: true }, 401);
 
   // 'apagar' e 'uso' mexem no acervo inteiro — a mesma régua do nucleo vale
-  // aqui, senão o perfil obra ganharia pelo acervo o poder de apagar que o
+  // aqui, senão o perfil solicitante ganharia pelo acervo o poder de apagar que o
   // nucleo nega.
   const ACAO_EQUIVALENTE: Record<string, string> = { apagar: "apagar", uso: "log" };
   const equivalente = ACAO_EQUIVALENTE[body.action];

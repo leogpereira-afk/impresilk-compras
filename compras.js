@@ -1038,21 +1038,243 @@ function botoesFluxoOC(o) {
   return passos.join('');
 }
 
-// WhatsApp de chegada: para o telefone da solicitação vinculada (ou da O.S. do
-// Mubisys). Sem telefone conhecido, abre o WhatsApp sem destinatário — a pessoa
-// escolhe na agenda; melhor do que esconder o botão e ninguém avisar.
-function avisarChegadaZap(o) {
+/* A mesma agenda, agora como tela: dá para cadastrar antes de precisar, em vez
+   de só no susto do "chegou o material e ninguém sabe o número". */
+function htmlEquipe(eq) {
+  if (!eq.length) {
+    return '<div class="cartao">' + vazio('👤', 'Ninguém cadastrado ainda',
+      'Cadastre quem pede material toda semana. Aí, quando a compra chegar, avisar é um toque — ' +
+      'sem procurar número na agenda do celular.') + '</div>';
+  }
+  return '<div class="cartao"><div class="tabela-rolagem"><table><thead><tr>' +
+    '<th>Nome</th><th>Onde trabalha</th><th>WhatsApp</th><th>Último aviso</th><th></th>' +
+    '</tr></thead><tbody>' +
+    eq.map((p) =>
+      '<tr><td><b>' + esc(p.nome || '—') + '</b></td>' +
+      '<td>' + esc(p.funcao || '—') + '</td>' +
+      '<td>' + esc(fmt.telefone(p.telefone)) + '</td>' +
+      '<td>' + (p.ultimoAvisoEm ? fmt.quando(p.ultimoAvisoEm) : '—') + '</td>' +
+      '<td class="num">' +
+        '<button class="btn pequeno" data-peditar="' + esc(p.id) + '">Editar</button> ' +
+        '<button class="btn pequeno" data-ptirar="' + esc(p.id) + '">Tirar</button>' +
+      '</td></tr>').join('') +
+    '</tbody></table></div></div>';
+}
+
+function ligarEquipe(el) {
+  el.querySelectorAll('[data-peditar]').forEach((b) =>
+    b.addEventListener('click', () => editarPessoaEquipe(b.dataset.peditar)));
+  el.querySelectorAll('[data-ptirar]').forEach((b) => b.addEventListener('click', async () => {
+    const p = achar('equipe', b.dataset.ptirar);
+    if (!p) { toast('Esta pessoa não está mais na lista — atualize a tela', 'ruim'); return; }
+    if (!await confirmar('Tirar ' + (p.nome || 'esta pessoa') + ' da lista de quem pede material?',
+      { perigo: true, ok: 'Tirar' })) return;
+    salvar('equipe', Object.assign({}, p, { ativo: false }));
+    render();
+    toast('Tirada da lista', 'bom');
+  }));
+}
+
+function editarPessoaEquipe(id) {
+  const p = id ? achar('equipe', id) : null;
+  if (id && !p) { toast('Esta pessoa não está mais na lista — atualize a tela', 'ruim'); return; }
+  abrirModal({
+    titulo: p ? 'Editar pessoa' : 'Nova pessoa',
+    corpo: '<div id="fPessoa">' +
+      campo('Nome', entrada('nome', p && p.nome, { placeholder: 'Quem pede material' })) +
+      '<div class="linha">' +
+        campo('Onde trabalha', entrada('funcao', p && p.funcao, { placeholder: 'Ex.: Impressão digital' })) +
+        campo('WhatsApp', entrada('telefone', p && fmt.telefone(p.telefone),
+          { tipo: 'tel', inputmode: 'numeric', placeholder: '(38) 9 9999-9999' })) +
+      '</div>' +
+      '</div>',
+    acoes: [
+      { texto: 'Voltar', aoClicar: () => fecharModal() },
+      { texto: 'Salvar', classe: 'primario', aoClicar: (fundo) => {
+        const d = lerCampos(fundo.querySelector('#fPessoa'));
+        const tel = soDigitos(d.telefone);
+        if (!String(d.nome || '').trim()) { toast('Dê um nome à pessoa', 'ruim'); return; }
+        if (tel.length < 10) { toast('Digite o WhatsApp com DDD', 'ruim'); return; }
+        // Cadastro manual não pode criar uma segunda linha de quem já existe.
+        const jaTem = acharNaEquipe(tel);
+        if (jaTem && (!p || jaTem.id !== p.id)) {
+          toast('Este número já é de ' + (jaTem.nome || 'alguém na lista'), 'ruim');
+          return;
+        }
+        salvar('equipe', Object.assign({}, p || {}, {
+          nome: String(d.nome).trim(),
+          funcao: String(d.funcao || '').trim(),
+          telefone: chaveTelefone(tel),
+          ativo: true
+        }));
+        fecharEste(fundo); render();
+        toast(p ? 'Pessoa atualizada' : 'Pessoa cadastrada', 'bom');
+      } }
+    ]
+  });
+}
+
+/* ── Agenda de quem pede material ───────────────────────────────────────────
+   As mesmas pessoas pedem material toda semana. Antes, avisar que o material
+   chegou dependia de alguém lembrar (ou digitar) o número de novo a cada
+   pedido — e quando a solicitação vinha sem telefone, o WhatsApp abria SEM
+   destinatário e o aviso simplesmente não saía.
+
+   Agora quem já pediu uma vez fica gravado: a próxima vez é um toque. Número
+   digitado na hora funciona igual, e o app pergunta DEPOIS de enviar se quer
+   guardar — perguntar antes atrasaria o aviso, que é o que importa. */
+const equipe = () => lista('equipe')
+  .filter((p) => p.ativo !== false)
+  .sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || '')));
+
+const soDigitos = (t) => String(t || '').replace(/\D/g, '');
+
+// O mesmo número escrito de duas formas (com e sem o DDI 55, com e sem máscara)
+// não pode virar dois cadastros da mesma pessoa. Tira o 55 só quando o que
+// sobra é um número brasileiro de 10 ou 11 dígitos — assim um número de fora,
+// que também começa com dígitos quaisquer, nunca é picotado por engano.
+const chaveTelefone = (t) => {
+  const d = soDigitos(t);
+  if (d.length > 11 && d.slice(0, 2) === '55') {
+    const sem55 = d.slice(2);
+    if (sem55.length === 10 || sem55.length === 11) return sem55;
+  }
+  return d;
+};
+
+const acharNaEquipe = (tel) => {
+  const k = chaveTelefone(tel);
+  return k ? equipe().find((p) => chaveTelefone(p.telefone) === k) || null : null;
+};
+
+// Guarda quem acabou de ser avisado. Se o número já está na agenda, só atualiza
+// o nome e a data — nunca cria uma segunda linha da mesma pessoa.
+function gravarNaEquipe(nome, telefone, funcao) {
+  const jaTem = acharNaEquipe(telefone);
+  salvar('equipe', Object.assign({}, jaTem || {}, {
+    nome: String(nome || '').trim() || (jaTem && jaTem.nome) || 'Sem nome',
+    telefone: chaveTelefone(telefone),
+    funcao: String(funcao || '').trim() || (jaTem && jaTem.funcao) || '',
+    ativo: true,
+    ultimoAvisoEm: new Date().toISOString()
+  }));
+  return !jaTem;   // true = pessoa nova
+}
+
+/* Escolhe para quem vai o aviso, ABRE o WhatsApp e devolve o que foi escolhido
+   ({ telefone, nome, digitado }) ou null se a pessoa fechar sem escolher.
+
+   O window.open mora DENTRO do clique de propósito: depois de um `await` o
+   navegador já não reconhece o gesto da pessoa e o bloqueador de pop-up come a
+   janela do WhatsApp — o aviso simplesmente não sairia, sem erro nenhum.
+   `sugestao` é o que o pedido já sabe: telefone e nome de quem solicitou. */
+function escolherQuemAvisar(sugestao = {}, texto = '') {
+  return new Promise((resolve) => {
+    const telSug = soDigitos(sugestao.telefone);
+    const daAgenda = equipe();
+    const jaGravado = acharNaEquipe(telSug);
+
+    const linhaPessoa = (p, marca) =>
+      '<div class="arquivo-solto"><span class="ic">' + marca + '</span>' +
+      '<div style="flex:1;min-width:0">' +
+        '<div class="nome">' + esc(p.nome || 'Sem nome') + '</div>' +
+        '<div class="meta">' + esc(fmt.telefone(p.telefone)) +
+          (p.funcao ? ' · ' + esc(p.funcao) : '') + '</div>' +
+      '</div>' +
+      '<div class="acoes">' +
+        '<button class="btn pequeno zap" data-avisar="' + esc(p.telefone) + '" ' +
+          'data-nome="' + esc(p.nome || '') + '">Avisar</button>' +
+        (p.id ? '<button class="btn pequeno" data-tirar="' + esc(p.id) + '" title="Tirar da lista">✕</button>' : '') +
+      '</div></div>';
+
+    const fundo = abrirModal({
+      titulo: 'Avisar que o material chegou',
+      aoFechar: () => resolve(null),
+      corpo:
+        (telSug && !jaGravado
+          ? '<p class="legenda">Quem pediu:</p>' +
+            linhaPessoa({ nome: sugestao.nome || 'Quem fez o pedido', telefone: telSug, funcao: sugestao.funcao }, '📋')
+          : '') +
+        (daAgenda.length
+          ? '<p class="legenda" style="margin-top:12px">Quem pede material:</p>' +
+            daAgenda.map((p) => linhaPessoa(p, chaveTelefone(p.telefone) === chaveTelefone(telSug) ? '📋' : '👤')).join('')
+          : '<p class="legenda" style="margin-top:12px">Ninguém gravado ainda — o primeiro número que você usar aqui já pode ficar salvo.</p>') +
+
+        '<div class="cartao" style="margin-top:14px"><h3>Outro número</h3>' +
+          '<div class="linha">' +
+            campo('Nome', entrada('nome', '', { placeholder: 'Quem vai receber o aviso' })) +
+            campo('WhatsApp', entrada('telefone', '', { tipo: 'tel', inputmode: 'numeric', placeholder: '(38) 9 9999-9999' })) +
+          '</div>' +
+          '<div class="barra-acoes"><button class="btn zap" id="avisarNovo">Avisar este número</button></div>' +
+        '</div>',
+      acoes: [{ texto: 'Fechar', aoClicar: () => fecharModal() }]
+    });
+
+    // fecharSilencioso, NUNCA fecharEste: fecharEste dispara o aoFechar acima,
+    // que resolveria a promessa com '' antes da escolha — e promessa só resolve
+    // uma vez, então o clique da pessoa seria engolido em silêncio.
+    fundo.querySelectorAll('[data-avisar]').forEach((b) => b.addEventListener('click', () => {
+      window.open(linkWhats(b.dataset.avisar, texto), '_blank');
+      fecharSilencioso(fundo);
+      resolve({ telefone: b.dataset.avisar, nome: b.dataset.nome || '', digitado: false });
+    }));
+
+    fundo.querySelectorAll('[data-tirar]').forEach((b) => b.addEventListener('click', async () => {
+      if (!await confirmar('Tirar esta pessoa da lista de quem pede material?', { perigo: true, ok: 'Tirar' })) return;
+      const p = achar('equipe', b.dataset.tirar);
+      if (p) salvar('equipe', Object.assign({}, p, { ativo: false }));
+      fecharSilencioso(fundo);
+      resolve(await escolherQuemAvisar(sugestao, texto));   // reabre já sem a pessoa tirada
+    }));
+
+    const bn = fundo.querySelector('#avisarNovo');
+    if (bn) bn.addEventListener('click', () => {
+      const d = lerCampos(fundo.querySelector('.corpo'));
+      const tel = soDigitos(d.telefone);
+      if (tel.length < 10) { toast('Digite o WhatsApp com DDD', 'ruim'); return; }
+      window.open(linkWhats(tel, texto), '_blank');
+      fecharSilencioso(fundo);
+      resolve({ telefone: tel, nome: (d.nome || '').trim(), digitado: true });
+    });
+  });
+}
+
+// WhatsApp de chegada: pergunta para quem vai (agenda + o telefone que o pedido
+// já conhece), manda, e só então oferece guardar o número novo.
+async function avisarChegadaZap(o) {
   const sc = (o.scId && achar('sc', o.scId)) || null;
   const ultimo = (o.recebimentos || [])[Math.max(0, (o.recebimentos || []).length - 1)] || {};
-  const tel = String((sc && sc.solicitante && sc.solicitante.telefone) || (sc && sc.os && sc.os.whatsapp) || (o.os && o.os.whatsapp) || '').replace(/\D/g, '');
+  const sugestao = {
+    telefone: (sc && sc.solicitante && sc.solicitante.telefone) || (sc && sc.os && sc.os.whatsapp) || (o.os && o.os.whatsapp) || '',
+    nome: (sc && sc.solicitante && sc.solicitante.nome) || '',
+    funcao: (sc && sc.solicitante && sc.solicitante.funcao) || ''
+  };
+
   const texto = 'Olá! Material do pedido *' + (o.codigo || '') + '* chegou' +
     (o.situacao === 'parcial' ? ' (em parte)' : '') + '.\n' +
     ((ultimo.itens || []).length ? '📦 ' + ultimo.itens.map((i) => i.descricao + ': ' + fmt.numero(i.qtd)).join(', ') + '\n' : '') +
     (ultimo.transportadora ? '🚚 Veio pela *' + ultimo.transportadora + '*\n' : '') +
     (ultimo.nf ? '📄 NF ' + ultimo.nf + '\n' : '') +
     '\n_' + (((S.cfg || {}).empresa || {}).nomeCurto || 'Impresilk') + ' — Compras_';
-  const base = tel ? 'https://wa.me/' + (tel.length <= 11 ? '55' + tel : tel) : 'https://wa.me/';
-  window.open(base + '?text=' + encodeURIComponent(texto), '_blank');
+
+  const escolha = await escolherQuemAvisar(sugestao, texto);
+  if (!escolha) return;                    // fechou sem escolher: nada foi enviado
+
+  // O aviso já saiu (o seletor abriu o WhatsApp no clique). Agora sim: guardar?
+  if (escolha.digitado && !acharNaEquipe(escolha.telefone)) {
+    const quem = escolha.nome || fmt.telefone(escolha.telefone);
+    if (await confirmar('Gravar ' + quem + ' na lista de quem pede material? Da próxima vez é só um toque.',
+        { titulo: 'Guardar o número', ok: 'Gravar' })) {
+      gravarNaEquipe(escolha.nome, escolha.telefone, sugestao.funcao);
+      render();
+      toast('Guardado na lista de quem pede', 'bom');
+    }
+    return;
+  }
+
+  // Quem já estava na lista só tem a data do último aviso atualizada.
+  const p = acharNaEquipe(escolha.telefone);
+  if (p) salvar('equipe', Object.assign({}, p, { ultimoAvisoEm: new Date().toISOString() }));
 }
 
 // Cobrança de atraso: vai para o WhatsApp do fornecedor com o resumo do pedido
@@ -1499,15 +1721,37 @@ function encolherFoto(file, maxLado = 1600, qualidade = 0.82) {
    ══════════════════════════════════════════════════════════════════════════ */
 /* A agenda de quem vende para a Impresilk. A aba de mão de obra saiu com os
    módulos de construção — aqui todo mundo é fornecedor de material. */
+let _abaForn = 'mat';
+
 TELAS.fornecedores = function (el, args) {
   if (args[0]) return fichaFornecedor(el, args[0]);
 
   const fs = fornecedoresAtivos();
+  const eq = equipe();
 
-  cabecalho('Fornecedores', fs.length + ' fornecedor(es) cadastrado(s)',
-    '<button class="btn primario" id="novoForn">+ Novo fornecedor</button>');
+  cabecalho('Fornecedores',
+    fs.length + ' fornecedor(es) · ' + eq.length + ' pessoa(s) que pede(m) material',
+    _abaForn === 'mat'
+      ? '<button class="btn primario" id="novoForn">+ Novo fornecedor</button>'
+      : '<button class="btn primario" id="novaPessoa">+ Nova pessoa</button>');
 
-  el.innerHTML = htmlFornecedores(fs);
+  el.innerHTML =
+    '<div class="abas">' +
+      '<button class="aba' + (_abaForn === 'mat' ? ' ativa' : '') + '" data-abaf="mat">🏢 Fornecedores (' + fs.length + ')</button>' +
+      '<button class="aba' + (_abaForn === 'eq' ? ' ativa' : '') + '" data-abaf="eq">👤 Quem pede material (' + eq.length + ')</button>' +
+    '</div>' +
+    (_abaForn === 'mat' ? htmlFornecedores(fs) : htmlEquipe(eq));
+
+  el.querySelectorAll('[data-abaf]').forEach((b) => b.addEventListener('click', () => {
+    _abaForn = b.dataset.abaf;
+    render();
+  }));
+
+  if (_abaForn === 'eq') {
+    document.getElementById('novaPessoa').addEventListener('click', () => editarPessoaEquipe(null));
+    ligarEquipe(el);
+    return;
+  }
 
   document.getElementById('novoForn').addEventListener('click', () => editarFornecedor(null));
   el.querySelectorAll('tr[data-ficha]').forEach((tr) => tr.addEventListener('click', (e) => {
