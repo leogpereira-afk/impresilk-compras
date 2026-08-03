@@ -196,6 +196,22 @@ function semValores(o: any): any {
   return saida;
 }
 
+/* semValores é lista de CHAVES — e dinheiro também mora dentro de TEXTO. As
+   linhas do histórico são escritas assim: 'Cotação registrada: Fulano — R$
+   1.234,00' e 'Ordem emitida — R$ 8.900'. Tirar o campo `total` e deixar o
+   histórico intacto é fechar a porta e deixar a janela aberta: o celular do
+   solicitante levava para casa o preço de cada compra e de cada concorrente. */
+const RE_DINHEIRO = /R\$\s*-?[\d.]+(?:,\d{1,2})?/g;
+
+function semDinheiroNoTexto(o: any): any {
+  if (typeof o === "string") return o.replace(RE_DINHEIRO, "R$ •••");
+  if (Array.isArray(o)) return o.map(semDinheiroNoTexto);
+  if (!o || typeof o !== "object") return o;
+  const saida: any = {};
+  for (const [k, v] of Object.entries(o)) saida[k] = semDinheiroNoTexto(v);
+  return saida;
+}
+
 export function filtrarLeitura(quem: Quem | null, registros: any[]): any[] {
   const p = PERFIS[perfilDe(quem)];
   if (!p || p.tudo || !p.le) return registros;
@@ -206,6 +222,7 @@ export function filtrarLeitura(quem: Quem | null, registros: any[]): any[] {
       const limpo = semValores(r);
       delete limpo.medicoes;
       delete limpo.aditivos;
+      if (Array.isArray(limpo.historico)) limpo.historico = semDinheiroNoTexto(limpo.historico);
       return limpo;
     });
 }

@@ -93,10 +93,21 @@ async function lerCfg(): Promise<any> {
 const CAMPOS_UNIAO = ["historico", "recebimentos", "cotacoes", "anexos", "versoes",
   "documentos", "avaliacoes", "fornecedores"];
 
+// Listas de TEXTO (ids soltos), que o unirPorId não sabe juntar: ele casa por
+// `it.id`, e string não tem id — todas cairiam na mesma chave e virariam uma.
+// Sem união aqui, dois compradores gerando ordens da MESMA solicitação em
+// celulares diferentes perdiam um dos vínculos: a solicitação fechava como
+// "atendida" com material ainda por chegar.
+const CAMPOS_UNIAO_TEXTO = ["ocIds", "cotIds", "scIds"];
+
 // Dentro de cada item unido, estas listas também se juntam em vez de se
 // sobrepor (os preços moram DENTRO do fornecedor convidado).
 const SUBLISTAS_UNIAO = ["itens_recebidos"];
 const SUBOBJETOS_UNIAO = ["precos"];
+
+// O que o FORNECEDOR escreve ao responder a cotação pelo link.
+const CAMPOS_DA_RESPOSTA = ["precos", "respondidoEm", "contato", "total", "obs",
+  "prazoEntrega", "condicaoPagamento", "validade"];
 
 function unirPorId(antigo: any, novo: any): any[] {
   const a = Array.isArray(antigo) ? antigo : [];
@@ -112,6 +123,17 @@ function unirPorId(antigo: any, novo: any): any[] {
     }
     for (const sub of SUBOBJETOS_UNIAO) {
       if (anterior[sub] || it[sub]) unido[sub] = { ...(anterior[sub] || {}), ...(it[sub] || {}) };
+    }
+    // O convite de cotação tem UM dono para a resposta: o fornecedor, que
+    // digita pelo link público. Se o comprador salva a cotação com uma cópia
+    // velha na mão, o espalhamento acima jogava os preços velhos por cima da
+    // correção que o fornecedor tinha acabado de mandar. Vence quem respondeu
+    // por último — e, se só um lado respondeu, vence esse lado.
+    const respA = anterior.respondidoEm, respB = it.respondidoEm;
+    if (respA && respB && String(respA) > String(respB)) {
+      for (const campo of CAMPOS_DA_RESPOSTA) if (campo in anterior) unido[campo] = anterior[campo];
+    } else if (respA && !respB) {
+      for (const campo of CAMPOS_DA_RESPOSTA) if (campo in anterior) unido[campo] = anterior[campo];
     }
     vistos.set(k, unido);
   }
@@ -140,6 +162,12 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
   for (const campo of CAMPOS_UNIAO) {
     if (antigo && (antigo[campo] || registro[campo])) novo[campo] = unirPorId(antigo[campo], registro[campo]);
   }
+  for (const campo of CAMPOS_UNIAO_TEXTO) {
+    if (antigo && (antigo[campo] || registro[campo])) {
+      novo[campo] = [...new Set([...(antigo[campo] || []), ...(registro[campo] || [])])]
+        .filter((x: unknown) => typeof x === "string" && x);
+    }
+  }
 
   // A situação de uma ordem de compra é DECIDIDA AQUI, depois de juntar os
   // recebimentos dos dois aparelhos. Cada celular só enxerga os recebimentos
@@ -167,8 +195,13 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
     const completo = (novo.itens || []).length > 0 &&
       (novo.itens || []).every((i: any) => recebidoDoItem(i.id) + 0.001 >= (Number(i.qtd) || 0));
     // 'entregue' manual (encerrar mesmo com falta) não é rebaixado para parcial.
+    // Olha a situação GUARDADA, não a que veio no pacote: um recebimento que
+    // ficou preso na fila do celular sem sinal chega depois com 'parcial' e
+    // rebaixava uma ordem que o escritório já tinha encerrado — a compra
+    // reabria sozinha dias depois, sem ninguém entender por quê.
     if (completo) novo.situacao = "entregue";
-    else if (novo.situacao !== "entregue") novo.situacao = "parcial";
+    else if (situacaoValida !== "entregue") novo.situacao = "parcial";
+    else novo.situacao = "entregue";
 
     // Quem decidiu que chegou tudo foi o servidor — então é ele que fecha as
     // solicitações ligadas. O navegador sozinho não enxerga os recebimentos do

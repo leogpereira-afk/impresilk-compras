@@ -129,9 +129,9 @@ function linhaItem(it = {}, comPreco = false) {
     '<div class="campo"><label>Unid.</label><select data-i="unid">' +
       uns.map((u) => '<option' + (u === (it.unid || 'un') ? ' selected' : '') + '>' + esc(u) + '</option>').join('') +
     '</select></div>' +
-    '<div class="campo"><label>Qtd</label><input type="text" data-i="qtd" inputmode="decimal" value="' + esc(it.qtd != null ? it.qtd : '') + '"></div>' +
+    '<div class="campo"><label>Qtd</label><input type="text" data-i="qtd" inputmode="decimal" value="' + esc(paraCampo(it.qtd)) + '"></div>' +
     (comPreco ?
-      '<div class="campo"><label>Preço unit.</label><input type="text" data-i="preco" inputmode="decimal" value="' + esc(it.preco != null ? it.preco : '') + '"></div>' +
+      '<div class="campo"><label>Preço unit.</label><input type="text" data-i="preco" inputmode="decimal" value="' + esc(paraCampo(it.preco)) + '"></div>' +
       '<div class="campo"><label>Marca / obs</label><input type="text" data-i="marca" value="' + esc(it.marca || '') + '"></div>'
       : '') +
     '<button class="lixeira" data-tirar title="Tirar item">✕</button>' +
@@ -394,6 +394,10 @@ function telaSolicitacao(el, id) {
         // Quem recebe a solicitação não precisa lembrar de cabeça quem vende
         // telha: o sistema procura no cadastro e no histórico de compras.
         (function () {
+          // Só para quem decide. O solicitante via o cartão e o botão "Pedir
+          // preço", que o servidor recusa de qualquer jeito — ele apertava e
+          // levava um "sem permissão" por uma porta que nem devia enxergar.
+          if (!decide) return '';
           if (!['nova', 'aprovada', 'em_cotacao'].includes(s.situacao)) return '';
           const sug = sugerirFornecedores(s.itens);
           if (!sug.length) {
@@ -505,8 +509,12 @@ function recalcularSC(scId, motivo) {
 
   const ocs = (sc.ocIds || []).map((id) => achar('oc', id))
     .filter((o) => o && !o.apagadoEm && o.situacao !== 'cancelada');
+  // 'aprovada' entra na lista dos que NÃO seguram: a cotação aprovada já virou
+  // ordem, seu papel acabou. Sem isso, cancelar a compra devolvia a solicitação
+  // para "Em cotação" — e lá ela sumia da fila de quem decide, esperando uma
+  // resposta de fornecedor que já tinha chegado.
   const cots = (sc.cotIds || []).map((id) => achar('cot', id))
-    .filter((c) => c && !c.apagadoEm && !['cancelada', 'recusada'].includes(c.situacao));
+    .filter((c) => c && !c.apagadoEm && !['cancelada', 'recusada', 'aprovada'].includes(c.situacao));
 
   let nova;
   if (ocs.length) nova = ocs.every((o) => o.situacao === 'entregue') ? 'atendida' : 'em_compra';
@@ -1308,7 +1316,10 @@ async function avancarOC(o, destino) {
       titulo: 'Encerrar mesmo com falta', multi: true, obrigatorio: true, ok: 'Encerrar'
     });
     if (!m) return;
-    const n = Object.assign({}, o, { situacao: 'entregue', encerradaComFalta: m });
+    // Sem recebidoEm, a nota de pontualidade do fornecedor passava a ser medida
+    // pela data da última mexida na ordem — que pode ser meses depois.
+    const n = Object.assign({}, o, { situacao: 'entregue', encerradaComFalta: m,
+      recebidoEm: o.recebidoEm || new Date().toISOString() });
     n.historico = historiar(o, 'Encerrada mesmo com falta: ' + m);
     salvar('oc', n);
     // Só fecha a solicitação quando TODAS as ordens dela chegaram: um pedido
@@ -1469,7 +1480,7 @@ TELAS.recebimento = function (el) {
         '</tbody></table>' +
         '<div class="barra-acoes" style="margin-top:10px">' +
           '<button class="btn verde" data-receber="' + esc(o.id) + '">📦 Registrar recebimento</button>' +
-          '<button class="btn" data-abrir="' + esc(o.id) + '">Ver ordem</button>' +
+          (podeVer('compras') ? '<button class="btn" data-abrir="' + esc(o.id) + '">Ver ordem</button>' : '') +
           ((o.fornecedor || {}).telefone ? '<button class="btn zap" data-cobrar="' + esc(o.id) + '">Cobrar entrega</button>' : '') +
         '</div>' +
       '</div>';

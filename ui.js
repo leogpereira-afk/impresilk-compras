@@ -342,6 +342,21 @@ function lerCampos(raiz) {
 // Aceita "1.234,56", "1234.56" e também "1.200" (ponto de milhar sem centavos).
 // Sem o terceiro caso, uma quantidade de 1.200 sacos virava 1,2 — foi assim que
 // o recebimento chegou a gravar mil vezes menos do que chegou na empresa.
+/* O caminho de VOLTA do numeroBR: número vira texto para preencher o campo.
+
+   Sem isso, 0.875 era escrito no input como "0.875" (ponto, do JS), e ao salvar
+   de novo o numeroBR lia aquilo pela regra de milhar — `\d{1,3}` casa o "0",
+   `(\.\d{3})+` casa o ".875" — e devolvia 875. Preço de R$ 0,875 por metro
+   virava R$ 875 só de abrir a ordem e salvar sem tocar em nada. Escrevendo em
+   pt-BR desde o começo, ida e volta fecham. */
+function paraCampo(v) {
+  if (v == null || v === '') return '';
+  if (typeof v === 'string') return v;          // já veio do teclado da pessoa
+  const n = Number(v);
+  if (!isFinite(n)) return '';
+  return String(n).replace('.', ',');
+}
+
 function numeroBR(v) {
   if (typeof v === 'number') return v;
   // Tira "R$", "kg", "un" e qualquer outro enfeite: quem digita valor no
