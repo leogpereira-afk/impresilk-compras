@@ -295,6 +295,7 @@ function fichaFornecedor(el, id) {
   cabecalho(f.nome, (f.categorias || 'Fornecedor de material') + ' · ' + fmt.cnpj(f.cnpj),
     '<a class="btn" href="#/fornecedores">← Voltar</a>' +
     (f.telefone ? '<button class="btn zap" id="fZap">WhatsApp</button>' : '') +
+    '<button class="btn" id="fNossosDados">📤 Nossos dados</button>' +
     '<button class="btn primario" id="fEditar">Editar cadastro</button>');
 
   el.innerHTML =
@@ -346,6 +347,10 @@ function fichaFornecedor(el, id) {
 
   el.querySelectorAll('[data-oc]').forEach((tr) => tr.addEventListener('click', () => irPara('compras/' + tr.dataset.oc)));
   document.getElementById('fEditar').addEventListener('click', () => editarFornecedor(f.id));
+  // Fornecedor novo pede os dados da Impresilk antes de faturar: sai daqui
+  // pronto, sem ninguém digitar CNPJ na mão.
+  document.getElementById('fNossosDados').addEventListener('click', () =>
+    mandarNossosDados({ telefone: f.telefone, contato: f.contato }));
   const bz = document.getElementById('fZap');
   if (bz) bz.addEventListener('click', () => window.open(linkWhats(f.telefone,
     'Olá ' + (f.contato || '') + ', aqui é da ' + ((S.cfg.empresa || {}).nomeCurto || 'Impresilk') + '.'), '_blank'));

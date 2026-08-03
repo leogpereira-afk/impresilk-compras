@@ -1,7 +1,7 @@
 /* Service worker — deixa o app abrir sem internet (a obra costuma ter sinal ruim).
    Regra do kit: SUBIR o número do CACHE a cada publicação, senão o navegador
    continua servindo o arquivo velho. */
-const CACHE = 'compras-shell-v7';
+const CACHE = 'compras-shell-v8';
 const ARQUIVOS = [
   './', './index.html', './styles.css', './config.js', './store.js', './ui.js',
   './pdf.js', './compras.js', './acervo.js', './cotacao.js', './app.js',

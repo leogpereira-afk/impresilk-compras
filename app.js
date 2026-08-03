@@ -474,6 +474,85 @@ function mostrarLinkObra() {
    Tudo que dá para entregar a alguém de fora num lugar só. Ninguém precisa
    caçar link dentro de cada tela. Nenhum destes pede senha — cada um mostra
    apenas o que aquela pessoa precisa ver. */
+/* ── Nossos dados para o fornecedor cadastrar ───────────────────────────────
+   Fornecedor novo sempre pede a mesma coisa antes de faturar: razão social,
+   CNPJ, inscrições, endereço e para onde mandar a nota. Isso ia e voltava por
+   WhatsApp, digitado na mão toda vez — e CNPJ digitado na mão volta errado,
+   nota sai com dado torto e o pagamento trava.
+
+   O cartão sai pronto daqui, do mesmo cadastro que imprime a ordem de compra:
+   um lugar só para manter certo. Campo em branco simplesmente não aparece —
+   melhor faltar uma linha do que mandar "Inscrição municipal: —". */
+function textoCadastroEmpresa() {
+  const e = (S.cfg || {}).empresa || {};
+  const linha = (rot, v) => (String(v || '').trim() ? rot + ': ' + String(v).trim() + '\n' : '');
+  const cidade = String(e.cidade || '').trim();
+  const cep = String(e.cep || '').trim();
+
+  return 'DADOS PARA CADASTRO\n\n' +
+    linha('Razão social', e.nome) +
+    linha('CNPJ', e.cnpj ? fmt.cnpj(e.cnpj) : '') +
+    linha('Inscrição estadual', e.ie) +
+    linha('Inscrição municipal', e.im) +
+    linha('Endereço', e.endereco) +
+    // Cidade e CEP na mesma linha quando há as duas; sozinhas, cada uma na sua.
+    // Concatenar sem olhar produzia "Cidade/UF: — CEP 39400-100" e o CEP repetido.
+    (cidade ? linha('Cidade/UF', cidade + (cep ? ' — CEP ' + cep : '')) : linha('CEP', cep)) +
+    linha('Telefone', e.telefone ? fmt.telefone(e.telefone) : '') +
+    linha('E-mail', e.email) +
+    linha('NF-e e boleto para', e.emailNfe) +
+    '\nPedidos chegam por ordem de compra numerada, com os dados fiscais nela.';
+}
+
+// Quais campos estão faltando — dito na hora, não depois que o fornecedor
+// responder "e a inscrição estadual?".
+function faltamNoCadastro() {
+  const e = (S.cfg || {}).empresa || {};
+  return [
+    ['Razão social', e.nome], ['CNPJ', e.cnpj], ['Inscrição estadual', e.ie],
+    ['Endereço', e.endereco], ['Cidade/UF', e.cidade], ['E-mail para NF-e', e.emailNfe],
+  ].filter(([, v]) => !String(v || '').trim()).map(([r]) => r);
+}
+
+/* `paraQuem` é opcional: com telefone, o botão do WhatsApp já vai direto para
+   aquele fornecedor; sem, abre o WhatsApp para você escolher na agenda. */
+function mandarNossosDados(paraQuem = {}) {
+  const texto = textoCadastroEmpresa();
+  const faltam = faltamNoCadastro();
+  const tel = String(paraQuem.telefone || '').replace(/\D/g, '');
+  const saudacao = 'Olá' + (paraQuem.contato ? ' ' + paraQuem.contato : '') + '! Seguem os dados da ' +
+    (((S.cfg || {}).empresa || {}).nomeCurto || 'nossa empresa') + ' para o cadastro:\n\n';
+
+  abrirModal({
+    titulo: 'Nossos dados para cadastro',
+    largo: true,
+    corpo:
+      (faltam.length
+        ? '<div class="aviso atencao">Falta preencher: <b>' + esc(faltam.join(', ')) + '</b>. ' +
+          'O fornecedor vai pedir esses campos — complete em Configurações antes de mandar.</div>'
+        : '<div class="aviso bom">Cadastro completo — é só mandar.</div>') +
+      '<p class="legenda">Isto é o que o fornecedor recebe:</p>' +
+      '<textarea id="txtCadastro" rows="14" readonly ' +
+        'style="width:100%;font-family:ui-monospace,monospace;font-size:.86rem">' +
+        esc(texto) + '</textarea>',
+    acoes: [
+      { texto: 'Fechar', aoClicar: () => fecharModal() },
+      { texto: 'Copiar', aoClicar: () => {
+        const cx = document.getElementById('txtCadastro');
+        if (!navigator.clipboard) { if (cx) { cx.removeAttribute('readonly'); cx.select(); } toast('Selecione e copie à mão', 'ruim'); return; }
+        navigator.clipboard.writeText(texto)
+          .then(() => toast('Dados copiados', 'bom'))
+          .catch(() => toast('Não consegui copiar — selecione o texto à mão', 'ruim'));
+      } },
+      // O window.open fica DENTRO do clique: depois de um await o navegador não
+      // reconhece mais o gesto e o bloqueador de pop-up engole a janela.
+      { texto: 'Mandar no WhatsApp', classe: 'zap', aoClicar: () => {
+        window.open(linkWhats(tel, saudacao + texto), '_blank');
+      } }
+    ]
+  });
+}
+
 TELAS.acessos = function (el) {
   const base = location.origin + location.pathname;
 
@@ -499,6 +578,12 @@ TELAS.acessos = function (el) {
   el.innerHTML =
     '<div class="aviso info">Nenhum destes links pede senha — e cada pessoa vê só o que é dela. ' +
     'Quem pede material não vê preço; quem responde cotação não vê o concorrente.</div>' +
+
+    '<div class="cartao"><h3>🧾 Nossos dados para o fornecedor cadastrar</h3>' +
+      '<p class="legenda">Razão social, CNPJ, inscrições e para onde mandar a nota — do mesmo cadastro que ' +
+      'imprime a ordem de compra. Copie ou mande no WhatsApp em vez de digitar na mão.</p>' +
+      '<div class="barra-acoes"><button class="btn primario" id="acNossosDados">📤 Abrir o cartão de cadastro</button></div>' +
+    '</div>' +
 
     '<div class="cartao"><h3>🏭 Para a equipe (produção e instalação)</h3>' +
       linha('📋', 'Pedir material', 'Qualquer um da equipe abre e pede — vira solicitação numerada',
@@ -528,6 +613,9 @@ TELAS.acessos = function (el) {
             ': ' + base + '#/ver/' + x.tipo + '/' + x.r.id + '/' + x.r.tokenPublico)).join('')
         : '<p class="legenda">Nenhum documento emitido ainda.</p>') +
     '</div>';
+
+  const bnd = document.getElementById('acNossosDados');
+  if (bnd) bnd.addEventListener('click', () => mandarNossosDados());
 
   el.querySelectorAll('[data-copiar]').forEach((b) => b.addEventListener('click', () => {
     const url = b.dataset.copiar;
@@ -626,19 +714,27 @@ TELAS.config = function (el) {
   el.innerHTML =
     '<div class="cartao" id="cEmpresa">' +
       '<h3>🏢 Dados da empresa</h3>' +
-      '<p class="legenda">Aparecem no cabeçalho das ordens de compra e de serviço.</p>' +
+      '<p class="legenda">Vão no cabeçalho da ordem de compra e no cartão que você manda para o fornecedor te cadastrar.</p>' +
       '<div class="linha">' +
         campo('Razão social', entrada('empresa.nome', emp.nome)) +
         campo('Nome curto', entrada('empresa.nomeCurto', emp.nomeCurto)) +
       '</div>' +
       '<div class="linha">' +
         campo('CNPJ', entrada('empresa.cnpj', emp.cnpj, { inputmode: 'numeric' })) +
-        campo('Inscrição estadual', entrada('empresa.ie', emp.ie)) +
-        campo('Telefone', entrada('empresa.telefone', emp.telefone, { tipo: 'tel' })) +
+        campo('Inscrição estadual', entrada('empresa.ie', emp.ie),
+          'Escreva ISENTO se for o caso — em branco o fornecedor liga para perguntar') +
+        campo('Inscrição municipal', entrada('empresa.im', emp.im)) +
       '</div>' +
       '<div class="linha">' +
-        campo('Endereço', entrada('empresa.endereco', emp.endereco)) +
+        campo('Endereço', entrada('empresa.endereco', emp.endereco, { placeholder: 'Rua, número, bairro' })) +
+        campo('Cidade / UF', entrada('empresa.cidade', emp.cidade, { placeholder: 'Montes Claros/MG' })) +
+        campo('CEP', entrada('empresa.cep', emp.cep, { inputmode: 'numeric' })) +
+      '</div>' +
+      '<div class="linha">' +
+        campo('Telefone', entrada('empresa.telefone', emp.telefone, { tipo: 'tel' })) +
         campo('E-mail', entrada('empresa.email', emp.email, { tipo: 'email' })) +
+        campo('E-mail para NF-e e boleto', entrada('empresa.emailNfe', emp.emailNfe, { tipo: 'email' }),
+          'Para onde o fornecedor manda nota e cobrança') +
       '</div>' +
       '<h3 style="margin-top:16px">✍️ Assinaturas dos documentos</h3>' +
       '<p class="legenda">Quem assina a ordem de compra que vai para o fornecedor.</p>' +
@@ -650,7 +746,10 @@ TELAS.config = function (el) {
         campo('Responsável de compras', entrada('assinaturas.engenheiro.nome', (ass.engenheiro || {}).nome)) +
         campo('Cargo', entrada('assinaturas.engenheiro.crea', (ass.engenheiro || {}).crea)) +
       '</div>' +
-      '<div class="barra-acoes"><button class="btn primario" id="salvarEmpresa">Salvar</button></div>' +
+      '<div class="barra-acoes">' +
+        '<button class="btn primario" id="salvarEmpresa">Salvar</button>' +
+        '<button class="btn" id="mandarDados">📤 Mandar nossos dados para um fornecedor</button>' +
+      '</div>' +
     '</div>' +
 
     '<div class="cartao">' +
@@ -716,6 +815,7 @@ TELAS.config = function (el) {
     '</div>';
 
   // Empresa
+  document.getElementById('mandarDados').addEventListener('click', () => mandarNossosDados());
   document.getElementById('salvarEmpresa').addEventListener('click', async () => {
     const dados = lerCampos(document.getElementById('cEmpresa'));
     const novo = Object.assign({}, S.cfg, dados);
