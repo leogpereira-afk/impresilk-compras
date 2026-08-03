@@ -16,8 +16,8 @@
 //   1. TOKEN (header x-token) — barra robô/curioso. Viaja no navegador, é leve.
 //   2. CRACHÁ (Authorization: Bearer) — validado aqui, assinado pela equipe-auth.
 // Ações públicas (só o TOKEN) são as telas que o FORNECEDOR abre por link:
-// responder cotação, informar prazo, relatar entrega (transportadora). Nelas
-// nunca sai preço de concorrente nem telefone de terceiro.
+// responder cotação e ver a ordem de compra. Nelas nunca sai preço de
+// concorrente nem telefone de terceiro.
 //
 // verify_jwt = false no config.toml: o preflight CORS chega sem token e o
 // gateway barraria antes de o código rodar. A autorização é AQUI DENTRO.
@@ -40,29 +40,38 @@ const NOMES_COLECOES = Object.keys(COLECOES);
 // ── Configuração padrão ─────────────────────────────────────────────────────
 const CFG_PADRAO = {
   empresa: {
-    nome: "DOMO INCORPORADORA E CONSTRUTORA LTDA",
-    nomeCurto: "Domo Construtora",
+    nome: "IMPRESILK COMUNICACAO VISUAL LTDA",
+    nomeCurto: "Impresilk",
     cnpj: "", ie: "", endereco: "", telefone: "", email: "",
   },
-  obras: [{ id: "diamond", nome: "Edifício Diamond", endereco: "", ativa: true }],
-  setores: ["Fundação", "Estrutura", "Alvenaria", "Instalações elétricas", "Instalações hidráulicas",
-    "Revestimento", "Esquadrias", "Pintura", "Cobertura", "Administrativo", "Ferramentas/EPI", "Outros"],
-  unidades: ["un", "pç", "m", "m²", "m³", "kg", "sc", "L", "cx", "rolo", "barra", "vb"],
-  disciplinas: ["Arquitetônico", "Estrutural", "Elétrico", "Hidrossanitário", "Incêndio", "Climatização",
-    "Gás", "Impermeabilização", "Terraplanagem", "Executivo", "As built", "Outros"],
+  // "obras" virou o DESTINO da compra (a chave do dado ficou obraId de propósito:
+  // renomear identificador que já roda em produção é como nascem bugs de porte).
+  obras: [
+    { id: "fabrica", nome: "Fábrica / produção", endereco: "", ativa: true },
+    { id: "escritorio", nome: "Escritório", endereco: "", ativa: true },
+    { id: "instalacao", nome: "Instalação em campo", endereco: "", ativa: true },
+  ],
+  setores: ["Impressão digital", "Recorte / plotter", "Marcenaria e ACM", "Serralheria",
+    "Letra caixa", "Elétrica e LED", "Acabamento", "Instalação", "Escritório",
+    "Ferramentas/EPI", "Manutenção", "Outros"],
+  unidades: ["un", "pç", "m", "m²", "kg", "L", "cx", "rolo", "bobina", "chapa", "barra", "cj", "vb"],
+  // Linha de produto — organiza catálogos, manuais e treinamentos.
+  disciplinas: ["Impressão digital", "Vinil e recorte", "ACM e chapas", "Letra caixa",
+    "LED e elétrica", "Perfis e estruturas", "Lona e tecido", "Adesivo e laminação",
+    "Máquinas e manutenção", "Instalação", "EPI e segurança", "Outros"],
   tiposDoc: ["CNPJ", "Contrato Social", "Alvará", "CND Federal", "CND Estadual", "CND Municipal",
-    "CND FGTS", "CND Trabalhista", "ART/RRT", "Licença Ambiental", "Seguro", "Habite-se",
-    "Matrícula", "Certificado Digital", "Outros"],
+    "CND FGTS", "CND Trabalhista", "Licença Ambiental", "Seguro", "Certificado Digital",
+    "Ficha técnica", "Certificado de garantia", "Outros"],
   assinaturas: {
-    diretor: { nome: "ALESSANDRO GONÇALVES", cargo: "Diretor de Engenharia", crea: "CREA-MG 150.950/D" },
-    engenheiro: { nome: "", cargo: "Engenheiro Civil", crea: "" },
+    diretor: { nome: "", cargo: "Direção", crea: "" },
+    engenheiro: { nome: "", cargo: "Responsável de compras", crea: "" },
   },
   clausulasOC: [
     "Esta Ordem de Compra tem força de contrato de aquisição, sendo regida pela legislação civil e comercial vigente.",
     "O fornecedor deverá emitir Nota Fiscal correspondente ao valor integral desta OC, com os dados fiscais do contratante.",
     "A entrega fora do prazo estabelecido sujeitará o fornecedor a multa de 0,5% ao dia sobre o valor dos materiais não entregues.",
-    "Materiais entregues em desacordo com as especificações serão rejeitados e devolvidos às custas do fornecedor.",
-    "O pagamento será liberado após recebimento, conferência e aceite formal dos materiais pelo Engenheiro da Obra.",
+    "Materiais entregues em desacordo com as especificações — cor, gramatura, medida, lote ou acabamento — serão rejeitados e devolvidos às custas do fornecedor.",
+    "O pagamento será liberado após recebimento, conferência e aceite formal dos materiais pelo responsável de compras.",
     "A presente OC somente produz efeitos após assinatura de ambas as partes e é válida pelo prazo indicado no campo Validade da Proposta.",
   ],
   senhaHash: null,
@@ -78,18 +87,14 @@ async function lerCfg(): Promise<any> {
 /* ── União de listas de dois donos ─────────────────────────────────────────── */
 // Listas em que os dois lados TÊM RAZÃO ao mesmo tempo: em vez de o último a
 // gravar apagar o do outro, o servidor junta item a item pelo id.
-// 'etapas'/'responsaveis' entraram depois da fusão do cronograma: como todos os
-// fornecedores da obra passaram a morar num registro só, o celular do
-// almoxarife subindo uma cópia velha apagava as confirmações que o concreteiro
-// tinha acabado de mandar pelo link.
-const CAMPOS_UNIAO = ["historico", "recebimentos", "cotacoes", "anexos", "medicoes", "versoes",
-  "diario", "documentos", "equipe", "avaliacoes", "aditivos", "adiantamentos",
-  "etapas", "responsaveis", "fornecedores"];
+// 'fornecedores' é a lista de convidados da cotação: dois compradores mexendo na
+// mesma cotação em celulares diferentes não podem apagar a resposta um do outro.
+const CAMPOS_UNIAO = ["historico", "recebimentos", "cotacoes", "anexos", "versoes",
+  "documentos", "avaliacoes", "fornecedores"];
 
 // Dentro de cada item unido, estas listas também se juntam em vez de se
-// sobrepor (as remessas e as entregas moram DENTRO da etapa; os preços moram
-// DENTRO do fornecedor convidado).
-const SUBLISTAS_UNIAO = ["remessas", "entregas", "itens_recebidos"];
+// sobrepor (os preços moram DENTRO do fornecedor convidado).
+const SUBLISTAS_UNIAO = ["itens_recebidos"];
 const SUBOBJETOS_UNIAO = ["precos"];
 
 function unirPorId(antigo: any, novo: any): any[] {
@@ -199,7 +204,7 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
     try { await guardarIndiceNumero(col, novo.numero, id); } catch { /* índice é atalho */ }
   }
   if (pre && !novo.codigo && novo.numero) novo.codigo = pre + "-" + String(novo.numero).padStart(4, "0");
-  if ((col === "oc" || col === "os") && !novo.tokenPublico) novo.tokenPublico = tokenCurto();
+  if (col === "oc" && !novo.tokenPublico) novo.tokenPublico = tokenCurto();
 
   // Cada fornecedor convidado ganha um endereço próprio para responder — é o
   // link que vai no WhatsApp. Um token por convite: um fornecedor nunca vê a
@@ -207,12 +212,6 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
   if (col === "cot") {
     novo.fornecedores = (novo.fornecedores || []).map((f: any) =>
       f && !f.token ? { ...f, token: tokenCurto() } : f);
-  }
-  // No cronograma o link é POR RESPONSÁVEL: um só endereço mostra todas as
-  // etapas daquele fornecedor, e ele confirma data por data.
-  if (col === "crono") {
-    novo.responsaveis = (novo.responsaveis || []).map((r: any) =>
-      r && !r.token ? { ...r, token: tokenCurto() } : r);
   }
 
   await gravarUm(col, id, novo);
@@ -234,7 +233,7 @@ function limparSolicitacao(r: any) {
     obs: txt(it.obs, 200),
   })).filter((it: any) => it.descricao);
   return {
-    obraId: txt(r.obraId, 40) || "diamond",
+    obraId: txt(r.obraId, 40) || "fabrica",
     obra: txt(r.obra, 120),
     solicitante: {
       nome: txt(r.solicitante && r.solicitante.nome, 80),
@@ -281,8 +280,7 @@ Deno.serve(async (req) => {
   // logada, logo não há crachá. O x-token é o gate: é secret do Supabase, não
   // viaja para navegador nenhum além do próprio app.
   const PUBLICAS = ["ping", "cfgPublico", "list", "getCfg", "novaSolicitacao", "andamento", "verPublico",
-    "verCotacao", "responderCotacao", "verPrazos", "responderPrazo",
-    "relatarEntrega", "sugerirEtapa"];
+    "verCotacao", "responderCotacao"];
   if (!PUBLICAS.includes(action) && !autenticado) return json({ error: "Entre de novo: sessão inválida ou vencida.", semSenha: true }, 401);
   if (!PUBLICAS.includes(action) && !podeFazer(quem, action)) {
     await registrarLog({ acao: "bloqueado: " + action, por, perfil: quem!.perfil });
@@ -494,8 +492,9 @@ Deno.serve(async (req) => {
 
       // ── PÚBLICO: fornecedor abre a OC/OS pelo link do WhatsApp ─────────────
       case "verPublico": {
-        const { tipo, id } = body;
-        if (!["oc", "os"].includes(tipo)) return json({ ok: false, error: "Tipo inválido" }, 400);
+        const { id } = body;
+        const tipo = "oc";
+        if (body.tipo && body.tipo !== "oc") return json({ ok: false, error: "Tipo inválido" }, 400);
         const r = await lerUm(tipo, id);
         if (!r || r.apagadoEm) return json({ ok: false, error: "Documento não encontrado" }, 404);
         if (!r.tokenPublico || r.tokenPublico !== body.t) return json({ ok: false, error: "Link inválido" }, 403);
@@ -504,13 +503,10 @@ Deno.serve(async (req) => {
         // LISTA BRANCA (nunca lista negra): só sai o que o documento precisa
         // mostrar. Lista negra sempre fica para trás quando um módulo novo passa
         // a guardar campo novo dentro do mesmo registro.
-        const campos = tipo === "oc"
-          ? ["id", "codigo", "situacao", "obra", "dataEmissao", "entregaPrevista", "fornecedor",
-             "localEntrega", "prazoEntrega", "validadeProposta", "modalidade", "condicaoPagamento",
-             "formaPagamento", "dadosBancarios", "garantia", "notaFiscalObrigatoria", "itens",
-             "ipiPerc", "icmsPerc", "frete", "seguro", "desconto", "total", "totalLiquido", "observacoes"]
-          : ["id", "codigo", "situacao", "obra", "localizacao", "contratoNumero", "dataEmissao",
-             "dataInicio", "dataTerminoPrevista", "empreiteiro", "itens", "total", "observacoes"];
+        const campos = ["id", "codigo", "situacao", "obra", "dataEmissao", "entregaPrevista", "fornecedor",
+          "localEntrega", "prazoEntrega", "validadeProposta", "modalidade", "condicaoPagamento",
+          "formaPagamento", "dadosBancarios", "garantia", "notaFiscalObrigatoria", "itens",
+          "ipiPerc", "icmsPerc", "frete", "seguro", "desconto", "total", "totalLiquido", "observacoes"];
         const enxuto: any = {};
         for (const c of campos) if (r[c] !== undefined) enxuto[c] = r[c];
 
@@ -579,139 +575,6 @@ Deno.serve(async (req) => {
         await gravarUm("cot", c.id, c);
         await marcarMudanca("cot");
         return json({ ok: true, total });
-      }
-
-      // ── PÚBLICO: o fornecedor vê as datas dele e diz se atende ─────────────
-      case "verPrazos": {
-        const c = await lerUm("crono", body.id);
-        if (!c || c.apagadoEm) return json({ ok: false, error: "Cronograma não encontrado" }, 404);
-        const r0 = (c.responsaveis || []).find((x: any) => x.token && x.token === body.t);
-        if (!r0) return json({ ok: false, error: "Link inválido" }, 403);
-        // Só as etapas DELE. Ninguém vê o cronograma inteiro da obra nem quem
-        // mais está contratado.
-        const minhas = (c.etapas || []).filter((e: any) => e.responsavelId === r0.id && !e.apagadoEm);
-        return json({
-          ok: true,
-          empresa: { nome: cfg.empresa.nome, nomeCurto: cfg.empresa.nomeCurto },
-          cronograma: { codigo: c.codigo, nome: c.nome, obra: c.obra, encerrado: c.situacao !== "ativo" },
-          responsavel: { nome: r0.nome, contato: r0.contato },
-          etapas: minhas.map((e: any) => ({
-            id: e.id, nome: e.nome, inicio: e.inicio, fim: e.fim,
-            qtd: e.qtd, unid: e.unid, obs: e.obs,
-            resposta: e.resposta || null,
-            remessas: e.remessas || [],
-            entregas: (e.entregas || []).map((x: any) => ({ em: x.em, data: x.data, nf: x.nf, qtd: x.qtd, obs: x.obs })),
-            concluida: !!e.concluidaEm,
-            pendenteAprovacao: !!e.pendenteAprovacao,
-            recusadaEm: e.recusadaEm || null,
-          })),
-        });
-      }
-
-      case "responderPrazo": {
-        const c = await lerUm("crono", body.id);
-        if (!c || c.apagadoEm) return json({ ok: false, error: "Cronograma não encontrado" }, 404);
-        if (c.situacao !== "ativo") return json({ ok: false, error: "Este cronograma foi encerrado" }, 403);
-        const r0 = (c.responsaveis || []).find((x: any) => x.token && x.token === body.t);
-        if (!r0) return json({ ok: false, error: "Link inválido" }, 403);
-        const i = (c.etapas || []).findIndex((e: any) => e.id === body.etapaId && e.responsavelId === r0.id);
-        if (i < 0) return json({ ok: false, error: "Etapa não encontrada" }, 404);
-
-        const atende = body.atende === true || body.atende === "sim";
-        if (!atende && !txt(body.justificativa, 500)) {
-          return json({ ok: false, error: "Diga por que não consegue atender" }, 400);
-        }
-        const e = c.etapas[i];
-
-        // Programação do fornecedor: ferro e concreto chegam parcelados, então
-        // ele detalha quantos caminhões e em que dias.
-        const remessas = (Array.isArray(body.remessas) ? body.remessas : []).slice(0, 20)
-          .map((x: any, n: number) => ({
-            id: (x && x.id) || ("rm" + n + idNovo()),
-            data: txt(x && x.data, 10),
-            qtd: num(x && x.qtd),
-            obs: txt(x && x.obs, 200),
-          })).filter((x: any) => x.data || x.qtd);
-
-        c.etapas[i] = {
-          ...e,
-          resposta: {
-            em: agora(), por: txt(body.por, 80) || r0.nome,
-            atende,
-            novaData: txt(body.novaData, 10),
-            justificativa: txt(body.justificativa, 500),
-          },
-          ...(remessas.length ? { remessas } : {}),
-        };
-        c.historico = unirPorId(c.historico, [{
-          id: idNovo(), em: agora(), por: r0.nome,
-          o_que: (atende ? "✅ " : "⛔ ") + r0.nome + (atende ? " confirmou" : " NÃO atende") +
-            ' a etapa "' + (e.nome || "") + '"' +
-            (!atende && body.novaData ? " — propôs " + body.novaData : "") +
-            (body.justificativa ? ": " + txt(body.justificativa, 200) : ""),
-        }]);
-        c.atualizadoEm = agora();
-        await gravarUm("crono", c.id, c);
-        await marcarMudanca("crono");
-        return json({ ok: true });
-      }
-
-      // ── PÚBLICO: o fornecedor relata o que já entregou ─────────────────────
-      case "relatarEntrega": {
-        const c = await lerUm("crono", body.id);
-        if (!c || c.apagadoEm) return json({ ok: false, error: "Cronograma não encontrado" }, 404);
-        if (c.situacao !== "ativo") return json({ ok: false, error: "Este cronograma foi encerrado" }, 403);
-        const r0 = (c.responsaveis || []).find((x: any) => x.token && x.token === body.t);
-        if (!r0) return json({ ok: false, error: "Link inválido" }, 403);
-        const i = (c.etapas || []).findIndex((e: any) => e.id === body.etapaId && e.responsavelId === r0.id);
-        if (i < 0) return json({ ok: false, error: "Etapa não encontrada" }, 404);
-
-        const rel = {
-          id: idNovo(), em: agora(), por: txt(body.por, 80) || r0.nome,
-          data: txt(body.data, 10), nf: txt(body.nf, 40), qtd: num(body.qtd),
-          obs: txt(body.obs, 500),
-          fotos: (Array.isArray(body.fotos) ? body.fotos : []).slice(0, 5).map((f: any) => txt(f, 60)),
-        };
-        const e = c.etapas[i];
-        c.etapas[i] = { ...e, entregas: unirPorId(e.entregas, [rel]) };
-        c.historico = unirPorId(c.historico, [{
-          id: idNovo(), em: agora(), por: r0.nome,
-          o_que: "🚚 " + r0.nome + ' informou entrega em "' + (e.nome || "") + '"' +
-            (rel.qtd ? " — " + rel.qtd : "") + (rel.nf ? " · NF " + rel.nf : ""),
-        }]);
-        c.atualizadoEm = agora();
-        await gravarUm("crono", c.id, c);
-        await marcarMudanca("crono");
-        return json({ ok: true });
-      }
-
-      // ── PÚBLICO: o fornecedor sugere uma etapa ─────────────────────────────
-      case "sugerirEtapa": {
-        const c = await lerUm("crono", body.id);
-        if (!c || c.apagadoEm) return json({ ok: false, error: "Cronograma não encontrado" }, 404);
-        if (c.situacao !== "ativo") return json({ ok: false, error: "Este cronograma foi encerrado" }, 403);
-        const r0 = (c.responsaveis || []).find((x: any) => x.token && x.token === body.t);
-        if (!r0) return json({ ok: false, error: "Link inválido" }, 403);
-        const nome = txt(body.nome, 160);
-        if (!nome) return json({ ok: false, error: "Escreva o que precisa acontecer" }, 400);
-        // Sugestão NÃO entra no cronograma: entra como proposta esperando o
-        // engenheiro aprovar. Quem manda na data da obra é a obra.
-        const etapa = {
-          id: idNovo(), nome, responsavelId: r0.id,
-          inicio: txt(body.inicio, 10), fim: txt(body.fim, 10),
-          qtd: num(body.qtd), unid: txt(body.unid, 10), obs: txt(body.obs, 500),
-          sugeridaPor: r0.nome, sugeridaEm: agora(), pendenteAprovacao: true,
-        };
-        c.etapas = [...(c.etapas || []), etapa];
-        c.historico = unirPorId(c.historico, [{
-          id: idNovo(), em: agora(), por: r0.nome,
-          o_que: "💡 " + r0.nome + ' sugeriu a etapa "' + nome + '"' +
-            (etapa.inicio ? " para " + etapa.inicio : "") + " — esperando sua aprovação",
-        }]);
-        c.atualizadoEm = agora();
-        await gravarUm("crono", c.id, c);
-        await marcarMudanca("crono");
-        return json({ ok: true });
       }
 
       // ── Configurações ──────────────────────────────────────────────────────

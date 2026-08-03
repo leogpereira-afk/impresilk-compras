@@ -61,7 +61,7 @@ TELAS.cotacoes = function (el, args) {
     'Aqui você manda o pedido de preço no WhatsApp e o fornecedor responde sozinho, sem você redigitar nada.</div>' +
     '<div class="cartao">' +
       (todas.length ?
-        '<div class="tabela-rolagem"><table><thead><tr><th>Nº</th><th>Itens</th><th>Obra</th>' +
+        '<div class="tabela-rolagem"><table><thead><tr><th>Nº</th><th>Itens</th><th>Destino</th>' +
         '<th>Fornecedores</th><th class="num">Melhor preço</th><th>Situação</th></tr></thead><tbody>' +
         todas.map((c) => {
           const resp = (c.fornecedores || []).filter(respondeu);
@@ -107,14 +107,14 @@ function abrirNovaCotacao(sc, convidados) {
               'depois é só copiar o link e mandar por onde der.</span>' : '') + '</div>'
         : '') +
       '<div class="linha">' +
-        campo('Obra', seletor('obraId', (sc && sc.obraId) || (obras()[0] || {}).id, obras().map((o) => ({ v: o.id, t: o.nome })))) +
+        campo('Destino', seletor('obraId', (sc && sc.obraId) || (obras()[0] || {}).id, obras().map((o) => ({ v: o.id, t: o.nome })))) +
         campo('Responder até', entrada('prazoResposta', prazo, { tipo: 'date' })) +
       '</div>' +
       '<h3>O que vai ser cotado</h3>' +
       '<div id="itensCot">' + itensIniciais.map((i) => linhaItem(i, false)).join('') + '</div>' +
       '<button class="btn pequeno" id="maisItemCot">+ Item</button>' +
       campo('Observação para o fornecedor', areaTexto('observacoes', '',
-        'Ex.: entrega no canteiro, informe prazo e condição de pagamento')) +
+        'Ex.: entrega na fábrica, informe prazo e condição de pagamento')) +
     '</div>',
     acoes: [
       { texto: 'Voltar', aoClicar: () => fecharModal() },
@@ -273,7 +273,7 @@ function telaCotacao(el, id) {
       '</div>' +
     '</div><div>' +
       '<div class="cartao"><h3>Dados</h3><p>' +
-        '<b>Obra:</b> ' + esc(c.obra || nomeObra(c.obraId)) + '<br>' +
+        '<b>Destino:</b> ' + esc(c.obra || nomeObra(c.obraId)) + '<br>' +
         '<b>Responder até:</b> ' + (c.prazoResposta ? fmt.data(c.prazoResposta) : '—') + '<br>' +
         '<b>Situação:</b> ' + etiqueta(c.situacao) +
         (c.ocId ? '<br><b>Virou:</b> ' + esc((achar('oc', c.ocId) || {}).codigo || 'ordem de compra') : '') +
@@ -408,7 +408,7 @@ function pedirPrecoWhats(c, f) {
   if (!f.token) { toast('Aguarde sincronizar para gerar o link do fornecedor', 'ruim'); return; }
   const linhas = [
     '*' + ((S.cfg.empresa || {}).nomeCurto || 'Impresilk') + '* — Pedido de cotação *' + (c.codigo || '') + '*',
-    'Obra: ' + (c.obra || ''),
+    'Destino: ' + (c.obra || ''),
     '',
     ...(c.itens || []).map((i, n) => (n + 1) + '. ' + i.descricao + ' — ' + fmt.numero(i.qtd) + ' ' + (i.unid || '')),
     '',

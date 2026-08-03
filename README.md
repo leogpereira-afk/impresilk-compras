@@ -4,7 +4,8 @@ Pedidos de compra da Impresilk: solicitação → aprovação → cotação → 
 compra → WhatsApp ao fornecedor → a caminho → recebimento com foto e
 transportadora → entregue.
 
-- Fluxo herdado do sistema da Domo Construtora (mesmo motor, lapidado em produção).
+- Fluxo herdado de um sistema de compras já lapidado em produção; a linguagem e
+  o acervo (catálogos, manuais, treinamentos) são da comunicação visual.
 - Vínculo com a O.S. do Mubisys: o pedido nasce sabendo cliente e materiais
   (lidos do PCP, que importa o ERP de hora em hora).
 - Login pela Central de Acessos (`equipe-auth`, sistema `compras`).

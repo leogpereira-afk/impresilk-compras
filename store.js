@@ -2,13 +2,13 @@
    quando cai a internet.
 
    Regra de ouro (offline-first): o dado é salvo NO APARELHO primeiro e só
-   depois sobe. Quem está na obra sem sinal continua trabalhando; quando a
+   depois sobe. Quem está na empresa sem sinal continua trabalhando; quando a
    internet volta, a fila sobe sozinha. */
 
 // TODAS as coleções do sistema. Ao criar uma nova, acrescente AQUI (e no
 // COLECOES do nucleo.mjs) — era em dois lugares e a cotação chegava do
 // servidor mas era jogada fora por não existir nesta lista.
-const COLECOES_APP = ['sc', 'cot', 'oc', 'os', 'crono', 'forn', 'prest', 'doc', 'proj'];
+const COLECOES_APP = ['sc', 'cot', 'oc', 'forn', 'doc', 'proj', 'trein'];
 const regVazio = () => COLECOES_APP.reduce((a, c) => { a[c] = []; return a; }, {});
 
 const S = {
@@ -40,7 +40,7 @@ const K = {
 
 // Espelho do que o servidor faz valer (lib/acesso.mjs). Serve só para não
 // mostrar botão que a pessoa não pode apertar — a porta é o servidor.
-const ESCRITA_POR_PERFIL = { obra: ['sc', 'oc', 'crono'] };
+const ESCRITA_POR_PERFIL = { obra: ['sc', 'oc'] };
 function podeEscrever(colecao) {
   const permitidas = ESCRITA_POR_PERFIL[S.perfil];
   return !permitidas || permitidas.includes(colecao);
@@ -58,7 +58,7 @@ async function api(action, dados = {}, opts = {}) {
   // Identidade: o crachá da Central de Acessos. O servidor valida e decide.
   if (!opts.publico && typeof AUTH !== 'undefined' && AUTH.temCracha()) headers['Authorization'] = 'Bearer ' + AUTH.cracha();
   if (S.quem) headers['x-quem'] = encodeURIComponent(S.quem);
-  // Prazo máximo: no 4G do canteiro a conexão "pendura" (fica aberta sem
+  // Prazo máximo: no 4G da equipe a conexão "pendura" (fica aberta sem
   // resposta) e sem isso a promessa nunca voltava — travando a tela atrás dela.
   const ctrl = new AbortController();
   const prazo = setTimeout(() => ctrl.abort(), opts.prazoMs || 60000);
@@ -367,7 +367,7 @@ function base64ParaBytes(b64) {
 }
 
 // Sobe um File em partes. onProgresso(0..1) pra barra de progresso.
-// Cada parte tem 3 tentativas: no 4G da obra uma falha isolada no meio de uma
+// Cada parte tem 3 tentativas: no 4G da empresa uma falha isolada no meio de uma
 // planta de 40MB não pode jogar fora o upload inteiro.
 async function enviarArquivo(file, onProgresso, cancelar) {
   const partes = Math.max(1, Math.ceil(file.size / TAM_PARTE));

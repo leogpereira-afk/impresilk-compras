@@ -1,5 +1,5 @@
-/* PDF da Ordem de Compra e da Ordem de Serviço, no mesmo formato da planilha
-   que a Domo já usava (cabeçalho, itens, impostos, cláusulas e assinaturas).
+/* PDF da Ordem de Compra, no mesmo formato da planilha
+   herdado do motor portado (cabeçalho, itens, impostos, cláusulas e assinaturas).
 
    Só usa Helvetica — fonte que o jsPDF já traz. Não registrar outra fonte sem
    registrar TODOS os estilos: setFont mantém o estilo atual e cai em Times
@@ -200,7 +200,7 @@ async function pdfOC(o, cfg) {
   y = blocoCampos(doc, y, [
     ['Fornecedor', f.nome], ['CNPJ', fmt.cnpj(f.cnpj)], ['Inscrição estadual', f.ie],
     ['Contato / representante', f.contato], ['Telefone', fmt.telefone(f.telefone)], ['E-mail', f.email],
-    ['Endereço', f.endereco], ['Obra / projeto', o.obra || ''], ['Data de emissão', fmt.data(o.dataEmissao)]
+    ['Endereço', f.endereco], ['Destino', o.obra || ''], ['Data de emissão', fmt.data(o.dataEmissao)]
   ], 3);
 
   y = tituloSecao(doc, y + 2, 'Condições comerciais');
@@ -282,219 +282,12 @@ async function pdfOC(o, cfg) {
 
   const ass = (cfg && cfg.assinaturas) || {};
   y = assinaturas(doc, Math.max(y + 6, y), [
-    Object.assign({ nome: emp.nomeCurto || 'Impresilk', cargo: 'Diretor de Engenharia' }, ass.diretor || {}),
+    Object.assign({ nome: emp.nomeCurto || 'Impresilk', cargo: 'Aprovação' }, ass.diretor || {}),
     { nome: f.nome || '', cargo: 'Representante do fornecedor', crea: f.cnpj ? 'CNPJ ' + fmt.cnpj(f.cnpj) : '' },
-    Object.assign({ nome: '', cargo: 'Engenheiro da obra' }, ass.engenheiro || {})
+    Object.assign({ nome: '', cargo: 'Compras' }, ass.engenheiro || {})
   ]);
 
   rodapePDF(doc, (emp.nomeCurto || 'Impresilk') + ' · Ordem de compra ' + (o.codigo || '') +
     ' · emitida em ' + fmt.data(o.dataEmissao || o.criadoEm));
-  doc.save((o.codigo || 'ordem-de-compra') + '-' + ((o.fornecedor || {}).nome || 'domo').replace(/\W+/g, '_').slice(0, 24) + '.pdf');
-}
-
-/* ── Boletim de Medição ────────────────────────────────────────────────────── */
-// É o papel que o prestador assina reconhecendo o que foi medido. Sem ele,
-// discussão de medição vira palavra contra palavra.
-async function pdfMedicao(os, m, cfg) {
-  const logo = await carregarLogo();
-  const doc = novoDoc();
-  const e = os.empreiteiro || {};
-  const emp = (cfg && cfg.empresa) || {};
-  const nMed = 'MEDIÇÃO ' + String(m.numero).padStart(2, '0');
-
-  // % acumulado até a medição ANTERIOR (a diferença é o que se paga agora).
-  const anteriores = (os.medicoes || [])
-    .filter((x) => x.situacao !== 'cancelada' && (x.numero || 0) < (m.numero || 0))
-    .sort((a, b) => (a.numero || 0) - (b.numero || 0));
-  const percAntes = (itemId) => {
-    let p = 0;
-    for (const x of anteriores) {
-      const it = (x.itens || []).find((y) => y.itemId === itemId);
-      if (it && it.perc != null) p = Number(it.perc) || 0;
-    }
-    return p;
-  };
-
-  let y = cabecalhoPDF(doc, logo, cfg, 'BOLETIM DE ' + nMed, os.codigo || '');
-
-  // Rascunho é conferência interna: sai marcado para ninguém confundir com o
-  // documento que libera pagamento.
-  if (m.situacao === 'rascunho') {
-    doc.setFillColor(253, 243, 224);
-    doc.rect(M, y - 2.5, UTIL, 7, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
-    doc.setTextColor(168, 104, 0);
-    doc.text('PRÉVIA — MEDIÇÃO AINDA NÃO APROVADA. NÃO VALE PARA PAGAMENTO.', M + 3, y + 2.2);
-    doc.setTextColor(20, 20, 20);
-    y += 8;
-  }
-
-  y = tituloSecao(doc, y + 2, 'Prestador e período');
-  y = blocoCampos(doc, y, [
-    ['Prestador', e.nome], ['CNPJ / CPF', fmt.doc(e.cnpjCpf)], ['Contrato nº', os.contratoNumero],
-    ['Obra', os.obra], ['Local', os.localizacao], ['Responsável técnico', e.responsavelTecnico],
-    ['Período medido', (m.de ? fmt.data(m.de) : '—') + ' a ' + (m.ate ? fmt.data(m.ate) : '—')],
-    ['Data da medição', fmt.data(m.em)], ['Medido por', m.por]
-  ], 3);
-
-  y = tituloSecao(doc, y + 2, 'Etapas medidas');
-  const colunas = [
-    { titulo: '#', largura: 8 },
-    { titulo: 'ETAPA', largura: 66 },
-    { titulo: 'CONTRATADO', largura: 26, alinha: 'right' },
-    { titulo: '% ANT.', largura: 16, alinha: 'right' },
-    { titulo: '% ATUAL', largura: 18, alinha: 'right' },
-    { titulo: 'NO PERÍODO', largura: 28, alinha: 'right' },
-    { titulo: 'ACUMULADO', largura: 28, alinha: 'right' }
-  ];
-  // O boletim é o retrato DAQUELA medição: monta a partir de m.itens (o que foi
-  // medido), não de os.itens (o contrato de hoje). Sem isso, reimprimir um
-  // boletim já assinado passava a listar aditivos lançados depois.
-  // E o valor do período é o que ficou GRAVADO — recalcular com o preço atual
-  // faria o papel não fechar com o líquido pago.
-  const porId = new Map((os.itens || []).map((i) => [i.id, i]));
-  const linhas = (m.itens || []).map((it, n) => {
-    const i = porId.get(it.itemId) || { descricao: '(etapa removida do contrato)', qtd: 0, preco: 0 };
-    const total = (Number(i.qtd) || 0) * (Number(i.preco) || 0);
-    const atual = Number(it.perc) || 0;
-    const antes = percAntes(it.itemId);
-    const periodo = it.valorPeriodo != null
-      ? Number(it.valorPeriodo) || 0
-      : total * Math.max(0, atual - antes) / 100;
-    return [
-      n + 1, i.descricao, fmt.brl(total),
-      fmt.numero(antes, 2) + '%', fmt.numero(atual, 2) + '%',
-      fmt.brl(periodo),
-      fmt.brl(total * atual / 100)
-    ];
-  });
-  y = tabela(doc, y, colunas, linhas, (d) => cabecalhoPDF(d, logo, cfg, 'BOLETIM DE ' + nMed, os.codigo || ''));
-
-  const contas = [
-    ['Bruto do período', Number(m.bruto) || 0],
-    ['Retenção técnica (' + fmt.numero(m.retencaoPerc || 0, 1) + '%)', -(Number(m.retencao) || 0)]
-  ].concat((m.descontos || []).map((d) => [d.descricao || 'Desconto', -(Number(d.valor) || 0)]));
-
-  // O quadro de totais não pode ser partido no meio nem cair em cima do rodapé.
-  const alturaContas = contas.length * 4.4 + 14;
-  if (y + alturaContas > 262) { doc.addPage(); y = cabecalhoPDF(doc, logo, cfg, 'BOLETIM DE ' + nMed, os.codigo || ''); }
-
-  const xTot = M + UTIL - 78;
-  doc.setFontSize(8);
-  contas.forEach((lin) => {
-    doc.setFont('helvetica', 'normal');
-    doc.text(String(lin[0]), xTot, y);
-    doc.text(fmt.brl(lin[1]), L - M - 2, y, { align: 'right' });
-    y += 4.4;
-  });
-  y += 1.6;
-  doc.setFillColor(...AZUL);
-  doc.rect(xTot - 3, y - 3.6, 81, 8, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text('LÍQUIDO A PAGAR', xTot, y + 1.6);
-  doc.text(fmt.brl(m.liquido), L - M - 2, y + 1.6, { align: 'right' });
-  doc.setTextColor(20, 20, 20);
-  y += 12;
-
-  if (m.obs) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    const linhasObs = doc.splitTextToSize(String(m.obs), UTIL - 4);
-    if (y + linhasObs.length * 3.8 + 12 > 266) { doc.addPage(); y = cabecalhoPDF(doc, logo, cfg, 'BOLETIM DE ' + nMed, os.codigo || ''); }
-    y = tituloSecao(doc, y, 'Observações');
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text(linhasObs, M + 2, y);
-    y += linhasObs.length * 3.8 + 4;
-  }
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.4);
-  const decl = doc.splitTextToSize(
-    'Declaramos que os serviços acima foram executados e conferidos no período indicado. ' +
-    'A retenção técnica será devolvida após a conclusão e o aceite final do serviço. ' +
-    'Este boletim é a base para a liberação do pagamento correspondente.', UTIL - 4);
-  if (y + decl.length * 3.4 + 8 > 268) { doc.addPage(); y = cabecalhoPDF(doc, logo, cfg, 'BOLETIM DE ' + nMed, os.codigo || ''); }
-  doc.text(decl, M + 2, y);
-  y += decl.length * 3.4 + 6;
-
-  const ass = (cfg && cfg.assinaturas) || {};
-  y = assinaturas(doc, y + 6, [
-    { nome: e.nome || '', cargo: 'Prestador do serviço',
-      crea: e.cnpjCpf ? (String(e.cnpjCpf).replace(/\D/g, '').length === 11 ? 'CPF ' + fmt.doc(e.cnpjCpf) : 'CNPJ ' + fmt.doc(e.cnpjCpf)) : '' },
-    Object.assign({ nome: '', cargo: 'Engenheiro da obra' }, ass.engenheiro || {}),
-    Object.assign({ nome: '', cargo: 'Diretor de Engenharia' }, ass.diretor || {})
-  ]);
-
-  rodapePDF(doc, (emp.nomeCurto || 'Impresilk') + ' · ' + nMed + ' da ' + (os.codigo || '') +
-    ' · ' + ((os.empreiteiro || {}).nome || ''));
-  doc.save((os.codigo || 'OS') + '-medicao-' + String(m.numero).padStart(2, '0') + '.pdf');
-}
-
-/* ── Ordem de Serviço ──────────────────────────────────────────────────────── */
-async function pdfOS(o, cfg) {
-  const logo = await carregarLogo();
-  const doc = novoDoc();
-  const e = o.empreiteiro || {};
-  const emp = (cfg && cfg.empresa) || {};
-  const total = (o.itens || []).reduce((s, i) => s + (Number(i.qtd) || 0) * (Number(i.preco) || 0), 0);
-
-  let y = cabecalhoPDF(doc, logo, cfg, 'ORDEM DE SERVIÇO', o.codigo || '');
-
-  y = tituloSecao(doc, y + 2, 'Contratado');
-  y = blocoCampos(doc, y, [
-    ['Empreiteiro / prestador', e.nome], ['CNPJ / CPF', fmt.doc(e.cnpjCpf)], ['Responsável técnico', e.responsavelTecnico],
-    ['Contrato nº', o.contratoNumero], ['Telefone', fmt.telefone(e.telefone)], ['Data de emissão', fmt.data(o.dataEmissao)],
-    ['Obra / projeto', o.obra], ['Localização / setor', o.localizacao], ['Prazo', fmt.data(o.dataInicio) + ' a ' + fmt.data(o.dataTerminoPrevista)]
-  ], 3);
-
-  y = tituloSecao(doc, y + 2, 'Serviços contratados');
-  const colunas = [
-    { titulo: '#', largura: 8 },
-    { titulo: 'DESCRIÇÃO DO SERVIÇO', largura: 100 },
-    { titulo: 'UN', largura: 12 },
-    { titulo: 'QTD', largura: 18, alinha: 'right' },
-    { titulo: 'PREÇO UNIT.', largura: 26, alinha: 'right' },
-    { titulo: 'TOTAL', largura: 26, alinha: 'right' }
-  ];
-  const linhas = (o.itens || []).map((i, n) => [
-    n + 1, i.descricao, i.unid || '', fmt.numero(i.qtd), fmt.brl(i.preco),
-    fmt.brl((Number(i.qtd) || 0) * (Number(i.preco) || 0))
-  ]);
-  y = tabela(doc, y, colunas, linhas, (d) => cabecalhoPDF(d, logo, cfg, 'ORDEM DE SERVIÇO', o.codigo || ''));
-
-  if (y > 245) { doc.addPage(); y = cabecalhoPDF(doc, logo, cfg, 'ORDEM DE SERVIÇO', o.codigo || ''); }
-  doc.setFillColor(...AZUL);
-  doc.rect(M + UTIL - 81, y - 3.6, 81, 8, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text('VALOR TOTAL', M + UTIL - 78, y + 1.6);
-  doc.text(fmt.brl(total), L - M - 2, y + 1.6, { align: 'right' });
-  doc.setTextColor(20, 20, 20);
-  y += 12;
-
-  if (o.observacoes) {
-    y = tituloSecao(doc, y, 'Observações / condições');
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    const obs = doc.splitTextToSize(String(o.observacoes), UTIL - 4);
-    doc.text(obs, M + 2, y);
-    y += obs.length * 3.8 + 6;
-  }
-
-  const ass = (cfg && cfg.assinaturas) || {};
-  y = assinaturas(doc, y + 8, [
-    Object.assign({ nome: '', cargo: 'Diretor de Engenharia' }, ass.diretor || {}),
-    { nome: e.nome || '', cargo: 'Empreiteiro / prestador',
-      crea: e.cnpjCpf ? (String(e.cnpjCpf).replace(/\D/g, '').length === 11 ? 'CPF ' + fmt.doc(e.cnpjCpf) : 'CNPJ ' + fmt.doc(e.cnpjCpf)) : '' },
-    Object.assign({ nome: '', cargo: 'Engenheiro Civil' }, ass.engenheiro || {})
-  ]);
-
-  rodapePDF(doc, (emp.nomeCurto || 'Impresilk') + ' · Ordem de serviço ' + (o.codigo || '') +
-    ' · emitida em ' + fmt.data(o.dataEmissao || o.criadoEm));
-  doc.save((o.codigo || 'ordem-de-servico') + '-' + ((o.empreiteiro || {}).nome || 'domo').replace(/\W+/g, '_').slice(0, 24) + '.pdf');
+  doc.save((o.codigo || 'ordem-de-compra') + '-' + ((o.fornecedor || {}).nome || 'fornecedor').replace(/\W+/g, '_').slice(0, 24) + '.pdf');
 }

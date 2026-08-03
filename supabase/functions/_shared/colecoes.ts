@@ -1,7 +1,7 @@
 // Lista ÚNICA das coleções do sistema, compartilhada pelas Edge Functions.
 //
 // Isso existe porque a lista já morou em três arquivos ao mesmo tempo e as
-// coleções novas (cotação e cronograma) ficaram de fora do backup diário sem
+// coleções novas ficaram de fora do backup diário sem
 // ninguém notar. Ao criar uma coleção nova, mexa AQUI e no COLECOES_APP do
 // store.js — só nesses dois lugares.
 //
@@ -9,13 +9,13 @@
 export const COLECOES: Record<string, { pre: string; nome: string }> = {
   sc:    { pre: "SC", nome: "Solicitação de compra" },
   cot:   { pre: "CT", nome: "Cotação" },
-  crono: { pre: "CR", nome: "Cronograma" },
   oc:    { pre: "OC", nome: "Ordem de compra" },
-  os:    { pre: "OS", nome: "Ordem de serviço" },
   forn:  { pre: "",   nome: "Fornecedor" },
-  prest: { pre: "",   nome: "Prestador de serviço" },
-  doc:   { pre: "",   nome: "Documento" },
-  proj:  { pre: "",   nome: "Projeto" },
+  // Acervo. A CHAVE ficou como nasceu no porte da Domo; o RÓTULO é o da
+  // comunicação visual. Renomear a chave obrigaria a migrar dado por estética.
+  doc:   { pre: "",   nome: "Manual" },
+  proj:  { pre: "",   nome: "Catálogo" },
+  trein: { pre: "",   nome: "Treinamento" },
 };
 
 export const NOMES_COLECOES = Object.keys(COLECOES);

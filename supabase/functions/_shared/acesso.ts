@@ -39,9 +39,9 @@ export const PERFIS: Record<string, {
   obra: {
     txt: "Solicitante",
     tudo: false,
-    escreve: ["sc", "oc", "crono"],
-    le: ["sc", "oc", "os", "crono", "forn", "doc", "proj"],
-    semPreco: ["oc", "os", "cot"],
+    escreve: ["sc", "oc"],
+    le: ["sc", "oc", "forn", "doc", "proj", "trein"],
+    semPreco: ["oc", "cot"],
   },
 };
 
@@ -101,7 +101,6 @@ export const perfilDe = (quem: Quem | null) => (quem && PERFIS[quem.perfil]) ? q
    Esconder a tela no menu não protege nada: a porta é o servidor. */
 const CAMPOS_OBRA: Record<string, string[]> = {
   oc: ["recebimentos", "historico", "situacao", "atualizadoEm", "atualizadoPor"],
-  crono: ["etapas", "responsaveis", "historico", "atualizadoEm", "atualizadoPor"],
 };
 
 const igual = (a: unknown, b: unknown) =>

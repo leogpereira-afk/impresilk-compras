@@ -1,16 +1,21 @@
-/* Qualificação de fornecedor e de prestador.
+/* Qualificação de fornecedor.
 
    A nota tem DUAS metades, e isso é de propósito:
 
    • DESEMPENHO — o sistema mede sozinho, do histórico que já existe. Entregou no
      prazo? Respondeu a cotação? Chegou tudo? Ninguém precisa preencher nada, e
      ninguém consegue "melhorar" a nota de um amigo.
-   • AVALIAÇÃO — as estrelas que quem viveu a obra dá depois da compra ou do
-     serviço. É o que o número não pega: se o motorista descarrega direito, se
-     o vendedor resolve problema, se a equipe deixa a obra limpa.
+   • AVALIAÇÃO — as estrelas que quem recebeu o material dá depois da compra.
+     É o que o número não pega: se a cor veio igual à prova, se o rolo chegou
+     sem amassado, se o vendedor resolve problema quando o lote sai errado.
 
    Uma sozinha mente. O fornecedor pode entregar sempre no prazo e mandar
    material ruim; pode ser um doce ao telefone e nunca cumprir data. */
+
+// Nome normalizado (sem acento, sem espaço sobrando) para não criar dois
+// cadastros do mesmo fornecedor por causa de um espaço a mais.
+const chaveNome = (x) => String(x || '').trim().toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
 
 /* ── Régua ─────────────────────────────────────────────────────────────────── */
 const CLASSES = [
@@ -40,7 +45,7 @@ function selo(nota, opts = {}) {
 
 const estrelasDe = (n) => n == null ? '—' : '★'.repeat(Math.round(n)) + '☆'.repeat(5 - Math.round(n));
 
-// Média das estrelas dadas à mão (0 a 5), de fornecedor ou prestador.
+// Média das estrelas dadas à mão (0 a 5) ao fornecedor.
 function mediaAvaliacoes(x) {
   const av = ((x && x.avaliacoes) || []).filter((a) => a && a.media && !a.apagadoEm);
   if (!av.length) return null;
@@ -58,28 +63,28 @@ function combinar(desempenho, estrelas) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+
+/* ══════════════════════════════════════════════════════════════════════════
    FORNECEDOR DE MATERIAL
    ══════════════════════════════════════════════════════════════════════════ */
 
 const CRITERIOS_FORN = [
   ['preco', 'Preço (era competitivo?)'],
   ['prazo', 'Cumpriu o prazo combinado'],
-  ['qualidade', 'Qualidade do material'],
+  ['qualidade', 'Qualidade do material (cor, medida, acabamento)'],
   ['atendimento', 'Atendimento (resolve problema?)']
 ];
 
 // Toda ordem de compra daquele fornecedor (por id ou, para as antigas, por nome).
 function comprasDoFornecedor(f) {
-  const ch = (x) => String(x || '').trim().toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+  const ch = chaveNome;
   const nome = ch(f.nome);
   return lista('oc').filter((o) => o.situacao !== 'rascunho' &&
     (o.fornecedorId === f.id || (nome && ch((o.fornecedor || {}).nome) === nome)));
 }
 
 function convitesDoFornecedor(f) {
-  const ch = (x) => String(x || '').trim().toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+  const ch = chaveNome;
   const nome = ch(f.nome);
   const saida = [];
   for (const c of lista('cot')) {
@@ -166,7 +171,7 @@ function avaliarFornecedor(oc) {
       'Leva 20 segundos e é o que evita comprar de novo com quem já deu problema.</p>' +
       '<div id="fAvalF">' +
         CRITERIOS_FORN.map(([k, rot]) => campo(rot, '<select data-campo="' + k + '">' + opcoes() + '</select>')).join('') +
-        campo('Observação', areaTexto('obs', '', 'Ex.: entregou 2 dias atrasado mas avisou antes')) +
+        campo('Observação', areaTexto('obs', '', 'Ex.: vinil veio 3 tons acima da prova — trocou sem discutir')) +
       '</div>',
     acoes: [
       { texto: 'Depois', aoClicar: () => fecharModal() },
@@ -194,58 +199,6 @@ function avaliarFornecedor(oc) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   PRESTADOR DE SERVIÇO
-   ══════════════════════════════════════════════════════════════════════════ */
-
-function desempenhoPrestador(p) {
-  const oss = lista('os').filter((o) => o.prestadorId === p.id);
-  const concluidas = oss.filter((o) => o.situacao === 'concluida');
-
-  // Terminou na data combinada?
-  const comPrazo = concluidas.filter((o) => o.dataTerminoPrevista && (o.concluidaEm || o.atualizadoEm));
-  const atrasos = comPrazo.map((o) => {
-    const fim = String(o.concluidaEm || o.atualizadoEm).slice(0, 10);
-    return Math.round((new Date(fim) - new Date(o.dataTerminoPrevista)) / 86400000);
-  });
-  const pontualidade = atrasos.length ? atrasos.filter((d) => d <= 0).length / atrasos.length : null;
-  const atrasoMedio = atrasos.length ? atrasos.reduce((s, d) => s + Math.max(0, d), 0) / atrasos.length : null;
-
-  // A pasta em dia é parte da qualificação: CND vencida da equipe dele é risco
-  // que a construtora paga junto.
-  const pend = typeof pendenciasPrestador === 'function' ? pendenciasPrestador(p) : [];
-  const graves = pend.filter((x) => x.grave).length;
-  const documentos = graves ? Math.max(0, 10 - graves * 2.5) : 10;
-
-  // Medição cancelada é retrabalho: alguém mediu errado ou o serviço voltou.
-  const medicoes = oss.reduce((s, o) => s + (o.medicoes || []).length, 0);
-  const canceladas = oss.reduce((s, o) => s + (o.medicoes || []).filter((m) => m.situacao === 'cancelada').length, 0);
-  const retrabalho = medicoes ? (medicoes - canceladas) / medicoes : null;
-
-  const partes = [];
-  if (pontualidade != null) partes.push({ v: pontualidade * 10, peso: 4 });
-  partes.push({ v: documentos, peso: 3 });
-  if (retrabalho != null) partes.push({ v: retrabalho * 10, peso: 2 });
-  const peso = partes.reduce((s, x) => s + x.peso, 0);
-  const nota = peso ? partes.reduce((s, x) => s + x.v * x.peso, 0) / peso : null;
-
-  return {
-    contratos: oss.length, concluidas: concluidas.length,
-    valorContratado: oss.filter((o) => o.situacao !== 'cancelada')
-      .reduce((s, o) => s + (totaisOS(o).contrato || 0), 0),
-    pontualidade, atrasoMedio, medidas: atrasos.length,
-    pendenciasGraves: graves, documentos,
-    medicoes, canceladas, retrabalho,
-    nota
-  };
-}
-
-function notaPrestador(p) {
-  const d = desempenhoPrestador(p);
-  const estrelas = mediaAvaliacoes(p);
-  const quantasAvaliacoes = ((p.avaliacoes) || []).filter((a) => a && a.media && !a.apagadoEm).length;
-  const provisorio = d.concluidas === 0 && quantasAvaliacoes === 0;
-  return { nota: combinar(d.nota, estrelas), desempenho: d, estrelas, quantasAvaliacoes, provisorio };
-}
 
 /* ══════════════════════════════════════════════════════════════════════════
    FICHA — a tela que explica a nota
@@ -260,7 +213,7 @@ function linhaFicha(icone, titulo, valor, detalhe, ruim) {
 
 const pct = (v) => v == null ? '—' : fmt.numero(v * 100, 0) + '%';
 
-function cartaoQualificacao(q, tipo) {
+function cartaoQualificacao(q) {
   const c = classeDe(q.nota);
   const d = q.desempenho;
   const semNada = q.nota == null;
@@ -273,8 +226,7 @@ function cartaoQualificacao(q, tipo) {
         '<div class="legenda">' + (semNada
           ? 'Ainda sem histórico para pontuar.'
           : q.provisorio
-            ? 'Nota provisória: ' + (tipo === 'forn' ? 'ainda não entregou nenhuma compra' : 'ainda não concluiu nenhum serviço') +
-              '. Ela vira definitiva na primeira entrega.'
+            ? 'Nota provisória: ainda não entregou nenhuma compra. Ela vira definitiva na primeira entrega.'
             : esc(c.txt) + ' — ' + esc(c.dica)) + '</div></div>' +
       '<div style="text-align:right">' +
         (semNada ? '<span class="etiqueta">sem histórico</span>'
@@ -286,38 +238,26 @@ function cartaoQualificacao(q, tipo) {
     '</div>' +
 
     '<div style="margin-top:10px">' +
-      (tipo === 'forn'
-        ? linhaFicha('🚚', 'Entrega no prazo', pct(d.pontualidade),
+      linhaFicha('🚚', 'Entrega no prazo', pct(d.pontualidade),
             d.medidas ? d.noPrazo + ' de ' + d.medidas + ' entrega(s) no prazo' +
               (d.atrasoMedio ? ' · atraso médio de ' + fmt.numero(d.atrasoMedio, 1) + ' dia(s)' : '')
               : 'nenhuma entrega com data prometida ainda',
-            d.pontualidade != null && d.pontualidade < 0.7) +
-          linhaFicha('📦', 'Entregou tudo', pct(d.completude),
+        d.pontualidade != null && d.pontualidade < 0.7) +
+      linhaFicha('📦', 'Entregou tudo', pct(d.completude),
             d.entregues ? d.entregues + ' compra(s) entregue(s)' +
               (d.comFalta ? ' · ' + d.comFalta + ' encerrada(s) com falta' : ' · sem falta')
               : 'nenhuma compra entregue ainda',
-            d.completude != null && d.completude < 0.8) +
-          linhaFicha('💵', 'Responde cotação', pct(d.taxaResposta),
+        d.completude != null && d.completude < 0.8) +
+      linhaFicha('💵', 'Responde cotação', pct(d.taxaResposta),
             d.convites ? d.respondidos + ' de ' + d.convites + ' convite(s)' +
               (d.tempoResposta != null ? ' · responde em ' + fmt.numero(d.tempoResposta, 0) + 'h' : '') +
               (d.ganhou ? ' · ganhou ' + d.ganhou : '')
               : 'nunca foi convidado para cotar',
-            d.taxaResposta != null && d.taxaResposta < 0.5)
-        : linhaFicha('📅', 'Termina no prazo', pct(d.pontualidade),
-            d.medidas ? d.medidas + ' contrato(s) concluído(s) com prazo' +
-              (d.atrasoMedio ? ' · atraso médio de ' + fmt.numero(d.atrasoMedio, 0) + ' dia(s)' : '')
-              : 'nenhum contrato concluído com data prevista',
-            d.pontualidade != null && d.pontualidade < 0.7) +
-          linhaFicha('🗂️', 'Pasta em dia', fmt.numero(d.documentos, 0) + '/10',
-            d.pendenciasGraves ? d.pendenciasGraves + ' pendência(s) grave(s) hoje — trava medição' : 'CND, ASO e NR em ordem',
-            d.pendenciasGraves > 0) +
-          linhaFicha('📏', 'Medição sem retrabalho', pct(d.retrabalho),
-            d.medicoes ? d.medicoes + ' medição(ões) · ' + d.canceladas + ' cancelada(s)' : 'nenhuma medição ainda',
-            d.retrabalho != null && d.retrabalho < 0.8)) +
+        d.taxaResposta != null && d.taxaResposta < 0.5) +
 
       linhaFicha('⭐', 'Nota da equipe', q.estrelas == null ? '—' : estrelasDe(q.estrelas),
         q.estrelas == null
-          ? 'ninguém avaliou ainda — avalie ao final de cada ' + (tipo === 'forn' ? 'compra' : 'serviço')
+          ? 'ninguém avaliou ainda — avalie ao final de cada compra'
           : fmt.numero(q.estrelas, 1) + ' de 5 em ' + (q.quantasAvaliacoes || 0) + ' avaliação(ões)') +
     '</div>' +
 
@@ -335,7 +275,7 @@ function listaAvaliacoes(x, criterios) {
   return av.map((a) =>
     '<div class="arquivo-solto" style="align-items:flex-start"><span class="ic">' + estrelasDe(a.media).slice(0, 1) + '</span>' +
     '<div style="flex:1;min-width:0">' +
-      '<div class="nome">' + esc(a.ocCodigo || a.osCodigo || '—') + ' · ' + estrelasDe(a.media) +
+      '<div class="nome">' + esc(a.ocCodigo || '—') + ' · ' + estrelasDe(a.media) +
         ' <b>' + fmt.numero(a.media, 1) + '</b></div>' +
       '<div class="meta">' + criterios.map(([k, rot]) =>
         esc(rot.split(' (')[0]) + ': ' + (a[k] || '—')).join(' · ') + '</div>' +
@@ -359,7 +299,7 @@ function fichaFornecedor(el, id) {
 
   el.innerHTML =
     '<div class="grade g2"><div>' +
-      cartaoQualificacao(q, 'forn') +
+      cartaoQualificacao(q) +
       '<div class="cartao"><h3>🧾 Compras</h3>' +
         (compras.length
           ? '<div class="tabela-rolagem"><table><thead><tr><th>Nº</th><th>Data</th>' +

@@ -1,7 +1,7 @@
 /* Compras — o miolo do sistema:
-   solicitação da obra → aprovação → cotação → ordem de compra → WhatsApp →
+   solicitação da empresa → aprovação → cotação → ordem de compra → WhatsApp →
    a caminho → recebimento com foto → entregue.
-   Também cuida das ordens de serviço (empreiteiros) e dos fornecedores. */
+   Também cuida do cadastro de fornecedores. */
 
 /* ── Apoio ─────────────────────────────────────────────────────────────────── */
 // Fotos já baixadas, por id de arquivo. Evita rebaixar tudo a cada redesenho.
@@ -190,7 +190,7 @@ TELAS.solicitacoes = function (el, args) {
     (!filtro.busca || JSON.stringify(s).toLowerCase().includes(filtro.busca.toLowerCase())));
 
   cabecalho('Solicitações de compra', todas.length + ' no total',
-    '<button class="btn" data-acao="linkObra">🔗 Link da obra</button>' +
+    '<button class="btn" data-acao="linkObra">🔗 Link da empresa</button>' +
     '<button class="btn primario" id="scNova">+ Nova solicitação</button>');
 
   el.innerHTML =
@@ -220,7 +220,7 @@ TELAS.solicitacoes = function (el, args) {
             '<td>' + fmt.quando(s.criadoEm) + '</td>' +
           '</tr>').join('') +
         '</tbody></table></div>'
-        : vazio('📋', 'Nenhuma solicitação', 'Mande o link da obra para o pessoal pedir material.')) +
+        : vazio('📋', 'Nenhuma solicitação', 'Mande o link da empresa para o pessoal pedir material.')) +
     '</div>';
 
   el.querySelectorAll('tr[data-id]').forEach((tr) => tr.addEventListener('click', () => irPara('solicitacoes/' + tr.dataset.id)));
@@ -258,7 +258,7 @@ function novaSolicitacaoInterna() {
       '</div>' +
       '<div id="scOsInfo"></div>' +
       '<div class="linha">' +
-        campo('Obra', seletor('obraId', obras()[0] && obras()[0].id, obras().map((o) => ({ v: o.id, t: o.nome })))) +
+        campo('Destino', seletor('obraId', obras()[0] && obras()[0].id, obras().map((o) => ({ v: o.id, t: o.nome })))) +
         campo('Setor', seletor('setor', '', cfgLista('setores'))) +
         campo('Precisa até', entrada('necessidadeEm', hojeISO(), { tipo: 'date' })) +
       '</div>' +
@@ -378,7 +378,7 @@ function telaSolicitacao(el, id) {
           (s.justificativa ? '<p style="margin-top:12px"><b>Observação:</b> ' + esc(s.justificativa) + '</p>' : '') +
           (s.motivoRecusa ? '<div class="aviso ruim" style="margin-top:12px"><b>Recusada:</b> ' + esc(s.motivoRecusa) + '</div>' : '') +
           '<div class="barra-acoes" style="margin-top:14px">' +
-            // Quem é da obra pede material, mas não decide a compra — nem na
+            // Quem é da empresa pede material, mas não decide a compra — nem na
             // tela nem no servidor.
             (decide && podeAprovar ? '<button class="btn verde" id="aprovar">✓ Aprovar</button>' +
               '<button class="btn perigo" id="recusar">✕ Recusar</button>' : '') +
@@ -556,7 +556,7 @@ TELAS.compras = function (el, args) {
     '</div>' +
     '<div class="cartao">' +
       (filtradas.length ?
-        '<div class="tabela-rolagem"><table><thead><tr><th>Nº</th><th>Fornecedor</th><th>Obra</th>' +
+        '<div class="tabela-rolagem"><table><thead><tr><th>Nº</th><th>Fornecedor</th><th>Destino</th>' +
         '<th class="num">Valor</th><th>Situação</th><th>Entrega</th></tr></thead><tbody>' +
         filtradas.map((o) => {
           const d = o.entregaPrevista ? diasAte(o.entregaPrevista) : null;
@@ -633,12 +633,12 @@ function editorOC(el, id, scId) {
       '<div class="cartao">' +
         '<h3>📦 Condições</h3>' +
         '<div class="linha">' +
-          campo('Obra', seletor('obraId', oc.obraId, obras().map((o) => ({ v: o.id, t: o.nome })))) +
+          campo('Destino', seletor('obraId', oc.obraId, obras().map((o) => ({ v: o.id, t: o.nome })))) +
           campo('Data de emissão', entrada('dataEmissao', oc.dataEmissao, { tipo: 'date' })) +
           campo('Entrega prevista', entrada('entregaPrevista', oc.entregaPrevista, { tipo: 'date' })) +
         '</div>' +
         '<div class="linha">' +
-          campo('Local de entrega', entrada('localEntrega', oc.localEntrega, { placeholder: 'Canteiro da obra' })) +
+          campo('Local de entrega', entrada('localEntrega', oc.localEntrega, { placeholder: 'Canteiro da empresa' })) +
           campo('Prazo de entrega', entrada('prazoEntrega', oc.prazoEntrega, { placeholder: 'Ex.: 10 dias úteis' })) +
           campo('Validade da proposta', entrada('validadeProposta', oc.validadeProposta, { placeholder: 'Ex.: 15 dias' })) +
         '</div>' +
@@ -912,7 +912,7 @@ function telaOC(el, id) {
                   : 'rastreio ' + esc(r.rastreio)) : '') + '</div>' : '') +
               (r.fotosPendentes
                 ? '<div class="meta" style="color:var(--vermelho)">' + r.fotosPendentes +
-                  ' foto(s) não subiram na obra — anexe aqui</div>' : '') + '</div>' +
+                  ' foto(s) não subiram na empresa — anexe aqui</div>' : '') + '</div>' +
             '<div class="acoes"><button class="btn pequeno" data-anexarfoto="' + esc(r.id) + '">' +
               (r.fotosPendentes ? '📷 Anexar foto' : 'Anexar foto') + '</button></div></div>' +
             ((r.fotos || []).length ? '<div class="miniaturas" data-fotos="' + esc(r.id) + '"></div>' : '')).join('') +
@@ -927,7 +927,7 @@ function telaOC(el, id) {
         '<div class="cartao">' +
           '<h3>Dados</h3>' +
           '<p>' +
-            '<b>Obra:</b> ' + esc(o.obra || nomeObra(o.obraId)) + '<br>' +
+            '<b>Destino:</b> ' + esc(o.obra || nomeObra(o.obraId)) + '<br>' +
             ((o.os && o.os.numero) ? '<b>O.S.:</b> ' + esc(o.os.numero) + ' — ' + esc(o.os.cliente || '') + '<br>' : '') +
             '<b>Emissão:</b> ' + fmt.data(o.dataEmissao) + '<br>' +
             '<b>Entrega prevista:</b> ' + (o.entregaPrevista ? fmt.data(o.entregaPrevista) : '—') + '<br>' +
@@ -1028,7 +1028,7 @@ function botoesFluxoOC(o) {
   }
   if (!['cancelada', 'entregue'].includes(o.situacao)) passos.push(b('cancelada', 'Cancelar ordem', 'perigo'));
   if (o.situacao === 'entregue') {
-    passos.push('<div class="aviso bom">Compra concluída e recebida na obra.</div>');
+    passos.push('<div class="aviso bom">Compra concluída e recebida na empresa.</div>');
     // A avaliação vale para a PRÓXIMA cotação: é ela que diz se chama de novo.
     passos.push(o.avaliacao
       ? '<div class="aviso info">Fornecedor avaliado: <b>' + fmt.numero(o.avaliacao.media, 1) + ' de 5</b>' +
@@ -1138,7 +1138,7 @@ function normalizarData(s) {
 function enviarOCWhats(o, link) {
   const linhas = [
     '*' + ((S.cfg.empresa || {}).nomeCurto || 'Impresilk') + '* — Ordem de Compra *' + (o.codigo || '') + '*',
-    'Obra: ' + (o.obra || ''),
+    'Destino: ' + (o.obra || ''),
     '',
     ...(o.itens || []).map((i, n) => (n + 1) + '. ' + i.descricao + ' — ' + fmt.numero(i.qtd) + ' ' + (i.unid || '')),
     '',
@@ -1215,10 +1215,10 @@ async function escolherCotacao(o, cid) {
    ══════════════════════════════════════════════════════════════════════════ */
 TELAS.recebimento = function (el) {
   const esperando = lista('oc').filter((o) => SIT_ESPERANDO.includes(o.situacao));
-  cabecalho('Recebimento na obra', esperando.length + ' compra(s) para chegar', '');
+  cabecalho('Recebimento na empresa', esperando.length + ' compra(s) para chegar', '');
 
   el.innerHTML =
-    '<div class="aviso info">Confira o material com o caminhão ainda na obra. Tire foto da nota e da carga: ' +
+    '<div class="aviso info">Confira o material com o caminhão ainda na empresa. Tire foto da nota e da carga: ' +
     'é a sua prova se faltar peça ou vier errado.</div>' +
     (esperando.length ? esperando.map((o) => {
       const d = o.entregaPrevista ? diasAte(o.entregaPrevista) : null;
@@ -1341,7 +1341,7 @@ function telaReceberOC(o) {
           fotosPendentes: fotosPendentes.length
         };
         // RELÊ a ordem antes de gravar. Este modal fica minutos aberto esperando
-        // foto subir no 4G da obra: gravar o retrato de quando ele abriu desfazia
+        // foto subir no 4G da empresa: gravar o retrato de quando ele abriu desfazia
         // a correção que o escritório fez no meio do caminho — e chegava a
         // ressuscitar uma compra cancelada.
         const base = achar('oc', o.id) || o;
@@ -1367,7 +1367,7 @@ function telaReceberOC(o) {
         // Quem fecha a solicitação é o SERVIDOR (nucleo.mjs, ao juntar os
         // recebimentos dos dois aparelhos). Fazer isso aqui também era
         // redundante E era o que fazia o servidor recusar o pacote inteiro do
-        // pessoal da obra, levando o recebimento junto.
+        // pessoal da empresa, levando o recebimento junto.
         fecharEste(fundo); render();
         if (cancelada) toast('Atenção: esta compra foi CANCELADA no escritório. A entrega ficou registrada.', 'ruim');
         else if (fotosPendentes.length) toast('Recebimento salvo, mas ' + fotosPendentes.length +
@@ -1417,7 +1417,7 @@ function anexarFotoRecebimento(ocId, recId) {
   const novas = [];
   abrirModal({
     titulo: 'Anexar foto ao recebimento',
-    corpo: '<p class="legenda">Use quando a foto não subiu na obra por falta de sinal. ' +
+    corpo: '<p class="legenda">Use quando a foto não subiu na empresa por falta de sinal. ' +
       'Ela entra neste mesmo recebimento — não precisa lançar a entrega de novo.</p>' +
       '<div class="campo"><label>Foto da nota ou da carga</label>' +
       '<input type="file" id="anexFoto" accept="image/*" multiple></div>' +
@@ -1497,42 +1497,17 @@ function encolherFoto(file, maxLado = 1600, qualidade = 0.82) {
 /* ══════════════════════════════════════════════════════════════════════════
    FORNECEDORES
    ══════════════════════════════════════════════════════════════════════════ */
-/* A agenda da empresa numa tela só: quem vende MATERIAL (fornecedor) e quem
-   vende MÃO DE OBRA (prestador). Eram duas abas idênticas no menu; o cadastro é
-   a mesma coisa, muda o que se guarda de cada um. */
-let _abaForn = 'mat';
-
+/* A agenda de quem vende para a Impresilk. A aba de mão de obra saiu com os
+   módulos de construção — aqui todo mundo é fornecedor de material. */
 TELAS.fornecedores = function (el, args) {
   if (args[0]) return fichaFornecedor(el, args[0]);
 
   const fs = fornecedoresAtivos();
-  const ps = typeof prestadores === 'function' ? prestadores() : [];
-  const pend = typeof prestadoresComPendencia === 'function' ? prestadoresComPendencia() : 0;
 
-  cabecalho('Fornecedores e prestadores',
-    fs.length + ' fornecedor(es) de material · ' + ps.length + ' prestador(es) de serviço',
-    _abaForn === 'mat'
-      ? '<button class="btn primario" id="novoForn">+ Novo fornecedor</button>'
-      : '<button class="btn primario" id="novoPrest">+ Novo prestador</button>');
+  cabecalho('Fornecedores', fs.length + ' fornecedor(es) cadastrado(s)',
+    '<button class="btn primario" id="novoForn">+ Novo fornecedor</button>');
 
-  el.innerHTML =
-    '<div class="abas">' +
-      '<button class="aba' + (_abaForn === 'mat' ? ' ativa' : '') + '" data-abaf="mat">🏢 Material (' + fs.length + ')</button>' +
-      '<button class="aba' + (_abaForn === 'mo' ? ' ativa' : '') + '" data-abaf="mo">👷 Mão de obra (' + ps.length + ')' +
-        (pend ? ' <span class="bolha">' + pend + '</span>' : '') + '</button>' +
-    '</div>' +
-    (_abaForn === 'mat' ? htmlFornecedores(fs) : htmlPrestadores());
-
-  el.querySelectorAll('[data-abaf]').forEach((b) => b.addEventListener('click', () => {
-    _abaForn = b.dataset.abaf;
-    render();
-  }));
-
-  if (_abaForn === 'mo') {
-    document.getElementById('novoPrest').addEventListener('click', () => editarPrestador(null));
-    ligarPrestadores(el);
-    return;
-  }
+  el.innerHTML = htmlFornecedores(fs);
 
   document.getElementById('novoForn').addEventListener('click', () => editarFornecedor(null));
   el.querySelectorAll('tr[data-ficha]').forEach((tr) => tr.addEventListener('click', (e) => {
@@ -1604,7 +1579,7 @@ function editarFornecedor(id) {
       '</div>' +
       '<div class="linha">' +
         campo('Endereço', entrada('endereco', f.endereco)) +
-        campo('O que fornece', entrada('categorias', f.categorias, { placeholder: 'Ex.: cimento, areia, brita' })) +
+        campo('O que fornece', entrada('categorias', f.categorias, { placeholder: 'Ex.: vinil, lona, ACM, perfil de alumínio' })) +
       '</div>' +
       '<div class="linha">' +
         campo('Dados bancários', entrada('banco', f.banco)) +

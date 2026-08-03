@@ -1,5 +1,5 @@
 /* App — casca do sistema: menu lateral, roteador, painel inicial,
-   configurações e as telas públicas (obra e fornecedor). */
+   configurações e as telas públicas (equipe e fornecedor). */
 
 /* ── Rotas ─────────────────────────────────────────────────────────────────── */
 const PUBLICAS = ['solicitar', 'acompanhar', 'ver', 'cotar', 'prazo'];
@@ -14,18 +14,17 @@ const PERFIS_APP = {
     telas: null   // null = todas
   },
   escritorio: {
-    txt: 'Escritório / compras',
-    desc: 'O dia a dia inteiro de compras e obra. Não cria acessos, não mexe nas ' +
-      'configurações da empresa e não esvazia a lixeira.',
-    telas: ['painel', 'solicitacoes', 'cotacoes', 'compras', 'recebimento', 'servicos',
-      'cronogramas', 'acompanhamento', 'fornecedores', 'prestadores', 'projetos', 'documentos',
-      'acessos', 'usuarios']
+    txt: 'Compras',
+    desc: 'O dia a dia inteiro de compras: cota, negocia, emite ordem e cobra o ' +
+      'fornecedor. Não cria acessos, não mexe nas configurações e não esvazia a lixeira.',
+    telas: ['painel', 'solicitacoes', 'cotacoes', 'compras', 'recebimento',
+      'fornecedores', 'catalogos', 'manuais', 'treinamentos', 'acessos', 'usuarios']
   },
   obra: {
-    txt: 'Obra / almoxarifado',
-    desc: 'Pede material, recebe a carga, lança o diário e consulta projeto e cronograma. ' +
-      'Não aprova compra, não apaga nada e não vê configurações.',
-    telas: ['painel', 'solicitacoes', 'recebimento', 'cronogramas', 'projetos', 'documentos', 'usuarios']
+    txt: 'Solicitante (produção / instalação)',
+    desc: 'Pede material, registra o recebimento e consulta catálogo, manual e ' +
+      'treinamento. Não aprova compra, não vê preço de cotação e não apaga nada.',
+    telas: ['painel', 'solicitacoes', 'recebimento', 'catalogos', 'manuais', 'treinamentos', 'usuarios']
   }
 };
 
@@ -46,27 +45,19 @@ const irPara = (r) => { location.hash = '#/' + r; };
 
 /* ── Menu ──────────────────────────────────────────────────────────────────── */
 const MENU = [
-  { grupo: 'Obra' },
+  { grupo: 'Compras' },
   { rota: 'painel', icone: '◧', texto: 'Painel' },
   { rota: 'solicitacoes', icone: '📋', texto: 'Solicitações', bolha: () => lista('sc').filter((s) => s.situacao === 'nova').length },
   { rota: 'cotacoes', icone: '💵', texto: 'Cotações', bolha: () => lista('cot').filter((c) => c.situacao === 'aberta').length },
   { rota: 'compras', icone: '🧾', texto: 'Ordens de compra', bolha: () => lista('oc').filter((o) => ['emitida', ...SIT_ESPERANDO].includes(o.situacao)).length },
   { rota: 'recebimento', icone: '📦', texto: 'Recebimento', bolha: () => lista('oc').filter((o) => SIT_ESPERANDO.includes(o.situacao)).length },
-  { rota: 'servicos', icone: '🛠️', texto: 'Ordens de serviço' },
-  // Cronograma e acompanhamento de fornecedor são a mesma coisa vista de dois
-  // ângulos — vivem numa aba só, com as duas visões lá dentro.
-  { rota: 'cronogramas', icone: '📅', texto: 'Cronograma e entregas',
-    bolha: () => (typeof paraAcompanhar === 'function'
-      ? paraAcompanhar().filter((x) => x.peso <= 1).length
-      : lista('crono').reduce((n, c) => n +
-          ((c.etapas || []).filter((e) => e && !e.apagadoEm && e.resposta && e.resposta.atende === false).length), 0)) },
-  // Fornecedor de material e prestador de mão de obra são as duas metades da
-  // mesma agenda — uma aba só, com as duas listas dentro.
-  { rota: 'fornecedores', icone: '🏢', texto: 'Fornecedores e prestadores',
-    bolha: () => prestadoresComPendencia() },
+  { rota: 'fornecedores', icone: '🏢', texto: 'Fornecedores' },
+  // Acervo da comunicação visual: catálogo do que os fornecedores vendem,
+  // manual do que a fábrica usa, e o treinamento de quem opera.
   { grupo: 'Acervo' },
-  { rota: 'projetos', icone: '📐', texto: 'Projetos' },
-  { rota: 'documentos', icone: '🗂️', texto: 'Documentos', bolha: () => docsVencendo(30).length },
+  { rota: 'catalogos', icone: '📚', texto: 'Catálogos' },
+  { rota: 'manuais', icone: '📘', texto: 'Manuais', bolha: () => docsVencendo(30).length },
+  { rota: 'treinamentos', icone: '🎓', texto: 'Treinamentos' },
   { grupo: 'Sistema' },
   // Para a direção é a tela de criar acesso; para os outros, só a própria senha.
   { rota: 'usuarios', icone: '👤', texto: () => ehDirecao() ? 'Acessos da equipe' : 'Minha senha',
@@ -105,7 +96,7 @@ function montarShell() {
 
 function pintarMenu(telaAtiva) {
   const visivel = MENU.filter((m) => m.grupo || podeVer(m.rota));
-  // Grupo sem nenhum item visível não aparece (o pessoal da obra não vê o
+  // Grupo sem nenhum item visível não aparece (o pessoal da empresa não vê o
   // título "Sistema" sozinho no meio do menu).
   const html = visivel.filter((m, i) => !m.grupo || (visivel[i + 1] && !visivel[i + 1].grupo)).map((m) => {
     if (m.grupo) return '<div class="grupo">' + esc(m.grupo) + '</div>';
@@ -138,7 +129,7 @@ function pintarMenu(telaAtiva) {
   if (bx) bx.addEventListener('click', sair);
 }
 
-// Sincronizar na mão: no canteiro o sinal vai e volta, e esperar o ciclo
+// Sincronizar na mão: na rua o sinal vai e volta, e esperar o ciclo
 // automático de 90s com o caminhão parado no portão não serve.
 async function sincronizarAgora() {
   if (!navigator.onLine) { toast('Sem internet agora. O que você fez está guardado no aparelho.', 'ruim'); return; }
@@ -220,7 +211,7 @@ function render() {
 // Redesenha quando chegam dados novos — mas nunca por cima de quem está
 // digitando (formulário aberto ou campo em foco perderiam o que foi escrito).
 function renderSeSeguro() {
-  // Tela pública (obra preenchendo pedido) nunca é redesenhada por sincronização.
+  // Tela pública (equipe preenchendo pedido) nunca é redesenhada por sincronização.
   if (PUBLICAS.includes(rotaAtual().tela)) return;
   if (document.querySelector('.fundo-modal')) { pintarMenuSeguro(); return; }
   const foco = document.activeElement;
@@ -316,7 +307,6 @@ function telaEntrar() {
 TELAS.painel = function (el) {
   const scs = lista('sc');
   const ocs = lista('oc');
-  const oss = lista('os');
   const cots = lista('cot');
 
   const novas = scs.filter((s) => s.situacao === 'nova');
@@ -329,11 +319,6 @@ TELAS.painel = function (el) {
     (c.fornecedores || []).length && (c.fornecedores || []).every((f) => f.respondidoEm));
   const cotsVencidas = cotsAbertas.filter((c) => c.prazoResposta && diasAte(c.prazoResposta) < 0);
 
-  const ossAtivas = oss.filter((o) => ['emitida', 'andamento'].includes(o.situacao));
-  const medPendentes = oss.reduce((n, o) =>
-    n + (o.medicoes || []).filter((m) => m.situacao === 'rascunho').length, 0);
-  const prestRisco = (typeof prestadoresComPendencia === 'function' ? prestadoresComPendencia() : 0);
-
   // Dinheiro: o do mês e o que está comprometido e ainda não chegou.
   const inicioMesISO = hojeISO().slice(0, 8) + '01';
   const doMes = ocs.filter((o) => !['cancelada', 'rascunho'].includes(o.situacao) &&
@@ -342,8 +327,6 @@ TELAS.painel = function (el) {
   const entregueMes = doMes.filter((o) => o.situacao === 'entregue')
     .reduce((s, o) => s + (Number(o.totalLiquido) || 0), 0);
   const aChegar = emRota.reduce((s, o) => s + (Number(o.totalLiquido) || 0), 0);
-  const servicoAndamento = ossAtivas.reduce((s, o) => s + (totaisOS(o).contrato || 0), 0);
-  const servicoMedido = ossAtivas.reduce((s, o) => s + (totaisOS(o).medido || 0), 0);
 
   // ── O que precisa de decisão HOJE ─────────────────────────────────────────
   const tarefas = [];
@@ -363,16 +346,11 @@ TELAS.painel = function (el) {
   if (cotsProntas.length) tarefa('💵', cotsProntas.length + ' cotação(ões) com todos os preços — falta decidir', 'cotacoes', true);
   if (cotsVencidas.length) tarefa('⏰', cotsVencidas.length + ' cotação(ões) passaram do prazo de resposta', 'cotacoes', true);
   if (atrasadas.length) tarefa('🚚', atrasadas.length + ' entrega(s) atrasada(s) — cobrar o fornecedor', 'recebimento', true);
-  if (medPendentes) tarefa('📏', medPendentes + ' medição(ões) de empreiteiro esperando aprovação', 'servicos', false);
-  if (prestRisco) tarefa('⚠️', prestRisco + ' prestador(es) com documento vencido — trava a medição', 'prestadores', true);
-  const etapasRecusadas = lista('crono').reduce((n, c) => n +
-    ((c.etapas || []).filter((e) => e && !e.apagadoEm && e.resposta && e.resposta.atende === false).length), 0);
-  if (etapasRecusadas) tarefa('📅', etapasRecusadas + ' etapa(s) do cronograma que o fornecedor NÃO atende', 'cronogramas', true);
   const docsVencidos = vencendo.filter((d) => diasAte(d.validadeEm) < 0);
-  if (docsVencidos.length) tarefa('🗂️', docsVencidos.length + ' documento(s) da empresa vencido(s)', 'documentos', true);
+  if (docsVencidos.length) tarefa('📘', docsVencidos.length + ' manual/documento vencido(s)', 'manuais', true);
 
-  cabecalho('Painel', 'Visão geral da obra',
-    '<button class="btn" data-acao="linkObra">🔗 Link da obra</button>' +
+  cabecalho('Painel', 'Visão geral das compras',
+    '<button class="btn" data-acao="linkObra">🔗 Link da empresa</button>' +
     (podeVer('cotacoes') ? '<a class="btn primario" href="#/cotacoes">Pedir cotação</a>' : ''));
 
   el.innerHTML =
@@ -384,11 +362,11 @@ TELAS.painel = function (el) {
             '<button class="tarefa' + (t.urgente ? ' urgente' : '') + '" data-ir="' + esc(t.rota) + '">' +
               '<span class="ic">' + t.icone + '</span><span>' + esc(t.texto) + '</span>' +
               '<span class="seta">›</span></button>').join('') + '</div>'
-        : '<p class="legenda">Nada parado esperando decisão. A obra está rodando.</p>') +
+        : '<p class="legenda">Nada parado esperando decisão.</p>') +
     '</div>' +
 
     // ── números ──
-    // Quem é da obra vê o movimento, não o dinheiro: o servidor nem manda os
+    // Quem é da empresa vê o movimento, não o dinheiro: o servidor nem manda os
     // valores para o aparelho dele, então aqui os cartões mudam de conteúdo.
     (podeVer('compras')
       ? '<div class="grade g3 compacto" style="margin-bottom:16px">' +
@@ -397,21 +375,21 @@ TELAS.painel = function (el) {
         indicador('A caminho', fmt.brl(aChegar),
           emRota.length + ' ordem(ns)' + (atrasadas.length ? ' · ' + atrasadas.length + ' atrasada(s)' : ' no prazo'),
           atrasadas.length ? 'alerta' : '', 'recebimento') +
-        indicador('Serviço contratado', fmt.brl(servicoAndamento),
-          ossAtivas.length + ' contrato(s) · ' + fmt.brl(servicoMedido) + ' medido', '', 'servicos') +
+        indicador('Solicitações abertas', String(lista('sc').filter((x) => x.situacao === 'nova').length),
+          'esperando aprovação', '', 'solicitacoes') +
       '</div>'
       : '<div class="grade g3 compacto" style="margin-bottom:16px">' +
         indicador('Pedido no mês', String(doMes.length), 'ordem(ns) de compra', '', '') +
         indicador('A caminho', String(emRota.length),
           atrasadas.length ? atrasadas.length + ' atrasada(s)' : 'no prazo',
           atrasadas.length ? 'alerta' : '', 'recebimento') +
-        indicador('Serviços na obra', String(ossAtivas.length), 'contrato(s) em andamento', '', '') +
+        indicador('Minhas solicitações', String(lista('sc').filter((x) => x.situacao === 'nova').length), 'esperando aprovação', '', 'solicitacoes') +
       '</div>') +
 
     '<div class="grade g2">' +
       // ── chegando ──
       '<div class="cartao">' +
-        '<h3>📦 Chegando na obra</h3>' +
+        '<h3>📦 Chegando</h3>' +
         (emRota.length ? emRota.slice(0, 6).map((o) => {
           const d = o.entregaPrevista ? diasAte(o.entregaPrevista) : null;
           const aviso = d == null ? '<span class="etiqueta">sem data</span>'
@@ -429,28 +407,6 @@ TELAS.painel = function (el) {
         }).join('') : '<p class="legenda">Nada a caminho.</p>') +
       '</div>' +
 
-      // ── serviços ──
-      (!podeVer('servicos') ? '' :
-      '<div class="cartao">' +
-        '<h3>🛠️ Serviços em andamento</h3>' +
-        (ossAtivas.length ? ossAtivas.slice(0, 6).map((o) => {
-          const t = totaisOS(o);
-          const p = (typeof prestadorDaOS === 'function') ? prestadorDaOS(o) : null;
-          const risco = p && (typeof pendenciasPrestador === 'function') &&
-            pendenciasPrestador(p).some((x) => x.grave);
-          const d = o.dataTerminoPrevista ? diasAte(o.dataTerminoPrevista) : null;
-          return '<div class="arquivo-solto clicavel" data-ir="servicos/' + esc(o.id) + '">' +
-            '<span class="ic">' + (risco ? '⚠️' : '🔨') + '</span><div style="flex:1;min-width:0">' +
-            '<div class="nome">' + esc(o.codigo || '—') + ' · ' + esc((o.empreiteiro || {}).nome || '—') + '</div>' +
-            '<div class="meta">' + fmt.numero(t.percFisico, 0) + '% executado · ' + fmt.brl(t.medido) + ' medido' +
-              (risco ? ' · <span style="color:var(--vermelho)">documento vencido</span>' : '') + '</div>' +
-            '<div class="progresso" style="margin-top:5px"><i style="width:' +
-              Math.min(100, Math.round(t.percFisico)) + '%"></i></div></div>' +
-            '<div class="acoes">' + (d != null && d < 0
-              ? '<span class="etiqueta et-vencido">' + (-d) + 'd de atraso</span>'
-              : d != null ? '<span class="etiqueta">' + d + 'd</span>' : '') + '</div></div>';
-        }).join('') : '<p class="legenda">Nenhum serviço contratado em andamento.</p>') +
-      '</div>') +
     '</div>' +
 
     // ── cotações esperando fornecedor ──
@@ -493,9 +449,9 @@ function indicador(rotulo, valor, pe, classe, ir) {
 function mostrarLinkObra() {
   const url = location.origin + location.pathname + '#/solicitar';
   abrirModal({
-    titulo: 'Link para a obra pedir material',
+    titulo: 'Link para a equipe pedir material',
     corpo:
-      '<p>Mande este link no grupo do WhatsApp da obra. Quem abrir pede material <b>sem senha nenhuma</b> — o pedido cai direto em Solicitações.</p>' +
+      '<p>Mande este link no grupo do WhatsApp da empresa. Quem abrir pede material <b>sem senha nenhuma</b> — o pedido cai direto em Solicitações.</p>' +
       '<div class="campo"><input type="text" id="linkObra" value="' + esc(url) + '" readonly></div>' +
       '<p class="legenda">Dica: peça pra salvarem na tela inicial do celular. Vira quase um aplicativo.</p>',
     acoes: [
@@ -507,7 +463,7 @@ function mostrarLinkObra() {
           .catch(() => { if (campo) campo.select(); toast('Não consegui copiar — selecione e copie à mão', 'ruim'); });
       } },
       { texto: 'Mandar no WhatsApp', classe: 'zap', aoClicar: () => {
-        window.open(linkWhats('', 'Pessoal, para pedir material da obra usem este link: ' + url), '_blank');
+        window.open(linkWhats('', 'Pessoal, para pedir material da empresa usem este link: ' + url), '_blank');
       } },
       { texto: 'Fechar', aoClicar: () => fecharModal() }
     ]
@@ -534,25 +490,21 @@ TELAS.acessos = function (el) {
     '</div></div>';
 
   const cotAbertas = lista('cot').filter((c) => c.situacao === 'aberta');
-  const cronosAtivos = lista('crono').filter((c) => c.situacao === 'ativo');
-  const docsPublicos = [
-    ...lista('oc').filter((o) => o.tokenPublico && !['rascunho', 'cancelada'].includes(o.situacao))
-      .map((o) => ({ tipo: 'oc', r: o, quem: (o.fornecedor || {}).nome, tel: (o.fornecedor || {}).telefone })),
-    ...lista('os').filter((o) => o.tokenPublico && !['rascunho', 'cancelada'].includes(o.situacao))
-      .map((o) => ({ tipo: 'os', r: o, quem: (o.empreiteiro || {}).nome, tel: (o.empreiteiro || {}).telefone }))
-  ];
+  const docsPublicos = lista('oc')
+    .filter((o) => o.tokenPublico && !['rascunho', 'cancelada'].includes(o.situacao))
+    .map((o) => ({ tipo: 'oc', r: o, quem: (o.fornecedor || {}).nome, tel: (o.fornecedor || {}).telefone }));
 
-  cabecalho('Links para fornecedor e obra', 'Endereços sem senha, para entregar a quem está fora do escritório', '');
+  cabecalho('Links para fornecedor e equipe', 'Endereços sem senha, para entregar a quem está fora do escritório', '');
 
   el.innerHTML =
     '<div class="aviso info">Nenhum destes links pede senha — e cada pessoa vê só o que é dela. ' +
-    'Quem tem o link do cronograma não vê preço; quem tem o de cotação não vê o concorrente.</div>' +
+    'Quem pede material não vê preço; quem responde cotação não vê o concorrente.</div>' +
 
-    '<div class="cartao"><h3>👷 Para a obra</h3>' +
-      linha('📋', 'Pedir material', 'Qualquer um do canteiro abre e pede — vira solicitação numerada',
-        base + '#/solicitar', '', 'Pessoal, para pedir material da obra usem este link: ' + base + '#/solicitar') +
-      linha('🔎', 'Andamento das compras', 'Abre direto mostrando tudo que a obra pediu e o que está a caminho',
-        base + '#/acompanhar', '', 'Para acompanhar as compras da obra: ' + base + '#/acompanhar') +
+    '<div class="cartao"><h3>🏭 Para a equipe (produção e instalação)</h3>' +
+      linha('📋', 'Pedir material', 'Qualquer um da equipe abre e pede — vira solicitação numerada',
+        base + '#/solicitar', '', 'Pessoal, para pedir material usem este link: ' + base + '#/solicitar') +
+      linha('🔎', 'Andamento das compras', 'Mostra tudo que foi pedido e o que está a caminho',
+        base + '#/acompanhar', '', 'Para acompanhar as compras: ' + base + '#/acompanhar') +
     '</div>' +
 
     '<div class="cartao"><h3>💵 Cotações em aberto</h3>' +
@@ -566,27 +518,13 @@ TELAS.acessos = function (el) {
         : '<p class="legenda">Nenhuma cotação aberta.</p>') +
     '</div>' +
 
-    '<div class="cartao"><h3>📅 Cronograma</h3>' +
-      (cronosAtivos.length
-        ? cronosAtivos.map((c) => (c.responsaveis || []).filter((r) => !r.apagadoEm).map((r) => {
-            const q = (typeof resumoResponsavel === 'function') ? resumoResponsavel(c, r) : { total: 0, semResposta: 0 };
-            return linha(q.semResposta ? '⏳' : '✅', r.nome + ' — ' + (c.codigo || ''),
-              (c.nome || '') + ' · ' + q.total + ' etapa(s), ' + q.semResposta + ' sem resposta',
-              base + '#/prazo/' + c.id + '/' + (r.token || ''), r.telefone,
-              'Cronograma da obra ' + (c.obra || '') + '. Confirme as datas por aqui: ' +
-              base + '#/prazo/' + c.id + '/' + (r.token || ''));
-          }).join('')).join('')
-        : '<p class="legenda">Nenhum cronograma ativo.</p>') +
-    '</div>' +
-
     '<div class="cartao"><h3>🧾 Documentos emitidos</h3>' +
       (docsPublicos.length
-        ? docsPublicos.map((x) => linha(x.tipo === 'oc' ? '🧾' : '🛠️',
+        ? docsPublicos.map((x) => linha('🧾',
             (x.r.codigo || '') + ' — ' + (x.quem || ''),
-            (x.tipo === 'oc' ? 'ordem de compra' : 'ordem de serviço') + ' · ' +
-            ((SITUACOES[x.r.situacao] || {}).txt || ''),
+            'ordem de compra · ' + ((SITUACOES[x.r.situacao] || {}).txt || ''),
             base + '#/ver/' + x.tipo + '/' + x.r.id + '/' + x.r.tokenPublico, x.tel,
-            (x.tipo === 'oc' ? 'Ordem de compra ' : 'Ordem de serviço ') + (x.r.codigo || '') +
+            'Ordem de compra ' + (x.r.codigo || '') +
             ': ' + base + '#/ver/' + x.tipo + '/' + x.r.id + '/' + x.r.tokenPublico)).join('')
         : '<p class="legenda">Nenhum documento emitido ainda.</p>') +
     '</div>';
@@ -682,7 +620,7 @@ TELAS.config = function (el) {
   const cfg = S.cfg || {};
   const emp = cfg.empresa || {};
   const ass = cfg.assinaturas || {};
-  cabecalho('Configurações', 'Empresa, obras, senha da equipe e backup', '');
+  cabecalho('Configurações', 'Empresa, destinos e backup', '');
   S.formAberto = true;
 
   el.innerHTML =
@@ -703,27 +641,28 @@ TELAS.config = function (el) {
         campo('E-mail', entrada('empresa.email', emp.email, { tipo: 'email' })) +
       '</div>' +
       '<h3 style="margin-top:16px">✍️ Assinaturas dos documentos</h3>' +
+      '<p class="legenda">Quem assina a ordem de compra que vai para o fornecedor.</p>' +
       '<div class="linha">' +
-        campo('Diretor de Engenharia', entrada('assinaturas.diretor.nome', (ass.diretor || {}).nome)) +
-        campo('CREA do diretor', entrada('assinaturas.diretor.crea', (ass.diretor || {}).crea)) +
+        campo('Quem aprova a compra', entrada('assinaturas.diretor.nome', (ass.diretor || {}).nome)) +
+        campo('Cargo', entrada('assinaturas.diretor.crea', (ass.diretor || {}).crea)) +
       '</div>' +
       '<div class="linha">' +
-        campo('Engenheiro da obra', entrada('assinaturas.engenheiro.nome', (ass.engenheiro || {}).nome)) +
-        campo('CREA do engenheiro', entrada('assinaturas.engenheiro.crea', (ass.engenheiro || {}).crea)) +
+        campo('Responsável de compras', entrada('assinaturas.engenheiro.nome', (ass.engenheiro || {}).nome)) +
+        campo('Cargo', entrada('assinaturas.engenheiro.crea', (ass.engenheiro || {}).crea)) +
       '</div>' +
       '<div class="barra-acoes"><button class="btn primario" id="salvarEmpresa">Salvar</button></div>' +
     '</div>' +
 
     '<div class="cartao">' +
-      '<h3>🏗️ Obras / empreendimentos</h3>' +
-      '<p class="legenda">Toda solicitação, compra e projeto pertence a uma obra.</p>' +
-      '<table><thead><tr><th>Obra</th><th>Endereço</th><th></th></tr></thead><tbody>' +
+      '<h3>🏭 Destinos do material</h3>' +
+      '<p class="legenda">Para onde o material vai: produção, estoque ou instalação em cliente. Toda solicitação e compra pertence a um destino.</p>' +
+      '<table><thead><tr><th>Destino</th><th>Endereço</th><th></th></tr></thead><tbody>' +
       (cfg.obras || []).map((o, i) =>
         '<tr><td><b>' + esc(o.nome) + '</b>' + (o.ativa === false ? ' <span class="etiqueta">inativa</span>' : '') + '</td>' +
         '<td>' + esc(o.endereco || '—') + '</td>' +
         '<td class="num"><button class="btn pequeno" data-obra="' + i + '">Editar</button></td></tr>').join('') +
       '</tbody></table>' +
-      '<div class="barra-acoes" style="margin-top:10px"><button class="btn" id="novaObra">+ Nova obra</button></div>' +
+      '<div class="barra-acoes" style="margin-top:10px"><button class="btn" id="novoDestino">+ Novo destino</button></div>' +
     '</div>' +
 
     '<div class="grade g2">' +
@@ -731,7 +670,7 @@ TELAS.config = function (el) {
         '<h3>🔒 Senha da equipe</h3>' +
         '<p class="legenda">A senha compartilhada, quem entra por ela entra como <b>Direção</b> e digita o nome à mão. ' +
         'O caminho recomendado é dar um <a href="#/usuarios">acesso próprio</a> a cada pessoa e guardar esta só com você. ' +
-        'Quem tem o link da obra não precisa de senha nenhuma.</p>' +
+        'Quem tem o link da empresa não precisa de senha nenhuma.</p>' +
         '<div class="campo"><label>Senha nova</label><input type="password" id="senhaNova" placeholder="mínimo 6 letras/números"></div>' +
         '<div class="campo"><label>Repita a senha nova</label><input type="password" id="senhaNova2"></div>' +
         '<button class="btn primario" id="trocarSenha">Trocar senha</button>' +
@@ -750,7 +689,7 @@ TELAS.config = function (el) {
     '<div class="cartao">' +
       '<h3>🔗 Links públicos</h3>' +
       '<p class="legenda">Não pedem senha. Podem ser mandados para qualquer pessoa.</p>' +
-      '<div class="arquivo-solto"><span class="ic">📋</span><div><div class="nome">Pedir material (obra)</div>' +
+      '<div class="arquivo-solto"><span class="ic">📋</span><div><div class="nome">Pedir material (equipe)</div>' +
         '<div class="meta">' + esc(location.origin + location.pathname) + '#/solicitar</div></div>' +
         '<div class="acoes"><button class="btn pequeno" data-copiar="#/solicitar">Copiar</button></div></div>' +
       '<div class="arquivo-solto"><span class="ic">🔎</span><div><div class="nome">Andamento das compras (só o nome)</div>' +
@@ -789,7 +728,7 @@ TELAS.config = function (el) {
 
   // Obras
   el.querySelectorAll('[data-obra]').forEach((b) => b.addEventListener('click', () => editarObra(Number(b.dataset.obra))));
-  document.getElementById('novaObra').addEventListener('click', () => editarObra(-1));
+  document.getElementById('novoDestino').addEventListener('click', () => editarObra(-1));
 
   // Senha
   document.getElementById('trocarSenha').addEventListener('click', async () => {
@@ -813,7 +752,7 @@ TELAS.config = function (el) {
     toast('Montando o backup…');
     try {
       const r = await api('backup');
-      baixarTexto('backup-domo-' + hojeISO() + '.json', JSON.stringify(r, null, 2));
+      baixarTexto('backup-compras-' + hojeISO() + '.json', JSON.stringify(r, null, 2));
       toast('Backup baixado', 'bom');
     } catch (e) { toast(e.message, 'ruim'); }
   });
@@ -876,7 +815,7 @@ TELAS.config = function (el) {
         'Confira antes.</div>' +
         '<div id="fNum"><div class="linha">' +
           campo('Documento', seletor('colecao', 'sc', [
-            { v: 'sc', t: 'Solicitações (SC)' }, { v: 'oc', t: 'Ordens de compra (OC)' }, { v: 'os', t: 'Ordens de serviço (OS)' }])) +
+            { v: 'sc', t: 'Solicitações (SC)' }, { v: 'oc', t: 'Ordens de compra (OC)' }, { v: 'cot', t: 'Cotações (CT)' }])) +
           campo('Próximo número', entrada('proximo', '1', { inputmode: 'numeric' })) +
         '</div></div>',
       acoes: [
@@ -902,17 +841,17 @@ function editarObra(i) {
   const obras = (S.cfg.obras || []).slice();
   const o = i >= 0 ? obras[i] : { id: 'obra' + Date.now().toString(36).slice(-4), nome: '', endereco: '', ativa: true };
   abrirModal({
-    titulo: i >= 0 ? 'Editar obra' : 'Nova obra',
+    titulo: i >= 0 ? 'Editar destino' : 'Novo destino',
     corpo: '<div id="fObra">' +
-      campo('Nome da obra', entrada('nome', o.nome, { placeholder: 'Ex.: Edifício Diamond' })) +
+      campo('Nome do destino', entrada('nome', o.nome, { placeholder: 'Ex.: Fábrica / produção' })) +
       campo('Endereço', entrada('endereco', o.endereco)) +
-      campo('Situação', seletor('ativa', o.ativa === false ? 'nao' : 'sim', [{ v: 'sim', t: 'Ativa' }, { v: 'nao', t: 'Encerrada' }])) +
+      campo('Situação', seletor('ativa', o.ativa === false ? 'nao' : 'sim', [{ v: 'sim', t: 'Ativo' }, { v: 'nao', t: 'Desativado' }])) +
       '</div>',
     acoes: [
       { texto: 'Voltar', aoClicar: () => fecharModal() },
       { texto: 'Salvar', classe: 'primario', aoClicar: async (fundo) => {
         const d = lerCampos(fundo.querySelector('#fObra'));
-        if (!d.nome.trim()) { toast('Dê um nome à obra', 'ruim'); return; }
+        if (!d.nome.trim()) { toast('Dê um nome ao destino', 'ruim'); return; }
         const nova = { id: o.id, nome: d.nome.trim(), endereco: d.endereco.trim(), ativa: d.ativa === 'sim' };
         if (i >= 0) obras[i] = nova; else obras.push(nova);
         try {
@@ -927,8 +866,8 @@ function editarObra(i) {
 function pintarLixeira() {
   const alvo = document.getElementById('lixeira');
   if (!alvo) return;
-  const cols = { sc: 'Solicitação', oc: 'Ordem de compra', os: 'Ordem de serviço', forn: 'Fornecedor',
-    doc: 'Documento', proj: 'Projeto', prest: 'Prestador' };
+  const cols = { sc: 'Solicitação', oc: 'Ordem de compra', cot: 'Cotação', forn: 'Fornecedor',
+    doc: 'Manual', proj: 'Catálogo', trein: 'Treinamento' };
   const itens = [];
   for (const c of Object.keys(cols)) {
     for (const r of (S.reg[c] || [])) if (r.apagadoEm) itens.push({ c, r });
@@ -964,7 +903,6 @@ function renderPublico(tela, args) {
   if (tela === 'acompanhar') return telaAcompanhar();
   if (tela === 'ver') return telaVerPublico(args);
   if (tela === 'cotar') return telaCotarPublico(args);
-  if (tela === 'prazo') return telaPrazoPublico(args);
 }
 
 let _cfgPub = null;
@@ -980,15 +918,15 @@ async function telaSolicitar() {
   try { cfg = await cfgPublico(); }
   catch { molduraPublica('<div class="cartao"><div class="aviso ruim">Sem internet. Tente de novo quando o sinal voltar.</div></div>', ''); return; }
   if (!cfg.obras || !cfg.obras.length) {
-    molduraPublica('<div class="cartao"><div class="aviso atencao">Nenhuma obra ativa no momento. ' +
+    molduraPublica('<div class="cartao"><div class="aviso atencao">Nenhum destino ativo no momento. ' +
       'Fale com o time de compras da Impresilk.</div></div>', 'Solicitação de material');
     return;
   }
 
-  const lembrado = JSON.parse(localStorage.getItem('domo_solicitante') || '{}');
+  const lembrado = JSON.parse(localStorage.getItem('compras_solicitante') || '{}');
   const linhaItem = (i) =>
     '<div class="item-linha" data-item>' +
-      '<div class="campo descricao"><label>Material</label><input type="text" data-i="descricao" placeholder="Ex.: Cimento CP-II 50kg"></div>' +
+      '<div class="campo descricao"><label>Material</label><input type="text" data-i="descricao" placeholder="Ex.: Vinil branco brilho 1,00m"></div>' +
       '<div class="campo"><label>Unid.</label>' + seletorSimples('unid', cfg.unidades, 'un') + '</div>' +
       '<div class="campo"><label>Quantidade</label><input type="text" data-i="qtd" inputmode="decimal" placeholder="0"></div>' +
       '<button class="lixeira" data-tirar title="Tirar">✕</button>' +
@@ -996,7 +934,7 @@ async function telaSolicitar() {
 
   molduraPublica(
     '<div class="cartao">' +
-      '<h2>Pedir material para a obra</h2>' +
+      '<h2>Pedir material</h2>' +
       '<p class="legenda">Preencha e envie. O setor de compras recebe na hora e você acompanha pelo número do pedido.</p>' +
       '<div class="linha">' +
         campo('Seu nome', '<input type="text" id="pNome" value="' + esc(lembrado.nome || '') + '" placeholder="Nome de quem está pedindo">') +
@@ -1004,7 +942,7 @@ async function telaSolicitar() {
       '</div>' +
       '<div class="linha">' +
         campo('Sua função', '<input type="text" id="pFuncao" value="' + esc(lembrado.funcao || '') + '" placeholder="Ex.: Encarregado">') +
-        campo('Obra', '<select id="pObra">' + cfg.obras.map((o) => '<option value="' + esc(o.id) + '">' + esc(o.nome) + '</option>').join('') + '</select>') +
+        campo('Destino', '<select id="pObra">' + cfg.obras.map((o) => '<option value="' + esc(o.id) + '">' + esc(o.nome) + '</option>').join('') + '</select>') +
       '</div>' +
       '<div class="linha">' +
         campo('Setor / etapa', '<select id="pSetor">' + cfg.setores.map((s) => '<option>' + esc(s) + '</option>').join('') + '</select>') +
@@ -1014,12 +952,12 @@ async function telaSolicitar() {
         '<div class="opcoes" id="pUrg">' +
           '<label class="opcao marcada"><input type="radio" name="urg" value="normal" checked>Normal</label>' +
           '<label class="opcao"><input type="radio" name="urg" value="urgente">Urgente</label>' +
-          '<label class="opcao"><input type="radio" name="urg" value="critica">Parou a obra</label>' +
+          '<label class="opcao"><input type="radio" name="urg" value="critica">Parou a produção</label>' +
         '</div>') +
       '<h3 style="margin-top:18px">O que você precisa</h3>' +
       '<div id="pItens">' + linhaItem() + linhaItem() + '</div>' +
       '<button class="btn" id="pMais">+ Adicionar item</button>' +
-      campo('Para quê / observação', '<textarea id="pObs" placeholder="Ex.: para concretar a laje do 3º pavimento"></textarea>') +
+      campo('Para quê / observação', '<textarea id="pObs" placeholder="Ex.: para a fachada da O.S. 4821 — instalar sexta"></textarea>') +
       '<div class="barra-acoes" style="margin-top:10px"><button class="btn primario" id="pEnviar" style="width:100%">Enviar solicitação</button></div>' +
       '<div id="pErro" style="margin-top:10px"></div>' +
     '</div>' +
@@ -1058,7 +996,7 @@ async function telaSolicitar() {
     const obraSel = document.getElementById('pObra');
     const opcaoObra = obraSel.options[obraSel.selectedIndex];
     if (!opcaoObra) {
-      erro.innerHTML = '<div class="aviso ruim">Nenhuma obra ativa no momento. Fale com o escritório.</div>';
+      erro.innerHTML = '<div class="aviso ruim">Nenhum destino ativo no momento. Fale com o escritório.</div>';
       return;
     }
     const registro = {
@@ -1071,7 +1009,7 @@ async function telaSolicitar() {
       justificativa: document.getElementById('pObs').value.trim(),
       itens: linhas
     };
-    localStorage.setItem('domo_solicitante', JSON.stringify(registro.solicitante));
+    localStorage.setItem('compras_solicitante', JSON.stringify(registro.solicitante));
 
     erro.innerHTML = '<div class="aviso info">Enviando…</div>';
     try {
@@ -1097,12 +1035,12 @@ const seletorSimples = (nome, opcoes, padrao) =>
   '<select data-i="' + nome + '">' + opcoes.map((o) =>
     '<option' + (o === padrao ? ' selected' : '') + '>' + esc(o) + '</option>').join('') + '</select>';
 
-// Quadro de andamento da obra. Abre JÁ com tudo na tela — quem está no canteiro
+// Quadro de andamento das compras. Abre JÁ com tudo na tela — quem está na
 // quer ver, não preencher formulário. O nome é opcional e serve só para separar
 // "meus pedidos" do resto. Sem preço e sem valor de ordem: isso é informação
 // comercial e o link circula no grupo do WhatsApp.
 async function telaAcompanhar() {
-  const lembrado = JSON.parse(localStorage.getItem('domo_solicitante') || '{}');
+  const lembrado = JSON.parse(localStorage.getItem('compras_solicitante') || '{}');
 
   molduraPublica(
     '<div id="aSaida"><div class="cartao"><div class="aviso info">Carregando o andamento…</div></div></div>' +
@@ -1132,7 +1070,7 @@ async function telaAcompanhar() {
     const outros = pedidos.filter((p) => !meus.includes(p));
     saida.innerHTML =
       (meus.length ? '<div class="cartao"><h3>Meus pedidos</h3>' + meus.map(cartaoPedido).join('') + '</div>' : '') +
-      '<div class="cartao"><h3>' + (meus.length ? 'Outros pedidos da obra' : 'Pedidos da obra') +
+      '<div class="cartao"><h3>' + (meus.length ? 'Outros pedidos da empresa' : 'Pedidos da empresa') +
         ' <span class="etiqueta">' + outros.length + '</span></h3>' +
         (outros.length ? outros.map(cartaoPedido).join('') : '<p class="legenda">Nenhum outro pedido.</p>') + '</div>' +
       '<p class="legenda" style="text-align:center">Atualizado ' + esc(emQuando) + '.</p>';
@@ -1156,7 +1094,7 @@ async function telaAcompanhar() {
   // Digitar o nome só reorganiza a tela; não precisa ir ao servidor de novo.
   document.getElementById('aNome').addEventListener('input', () => {
     const n = document.getElementById('aNome').value.trim();
-    localStorage.setItem('domo_solicitante', JSON.stringify(Object.assign({}, lembrado, { nome: n })));
+    localStorage.setItem('compras_solicitante', JSON.stringify(Object.assign({}, lembrado, { nome: n })));
     pintar();
   });
 
@@ -1205,12 +1143,12 @@ function cartaoPedido(p) {
 
 // #/ver/oc/<id>/<token> — o que o fornecedor abre pelo WhatsApp
 async function telaVerPublico(args) {
-  const [tipo, id, t] = args;
+  const [tipo, id, t] = args;   // tipo é sempre 'oc': só ordem de compra tem link público
   molduraPublica('<div class="cartao"><p class="legenda">Abrindo documento…</p></div>', '');
   try {
     const r = await api('verPublico', { tipo, id, t }, { publico: true });
     const d = r.registro;
-    const ehOC = tipo === 'oc';
+
     molduraPublica(
       '<div class="cartao">' +
         '<div class="barra-acoes" style="justify-content:space-between">' +
@@ -1218,9 +1156,9 @@ async function telaVerPublico(args) {
         '</div>' +
         '<p class="legenda">' + esc(r.cfg.empresa.nome) + (r.cfg.empresa.cnpj ? ' · CNPJ ' + esc(fmt.cnpj(r.cfg.empresa.cnpj)) : '') + '</p>' +
         '<div class="linha" style="margin-top:10px">' +
-          '<div><b>' + (ehOC ? 'Fornecedor' : 'Prestador') + '</b><br>' + esc(((ehOC ? d.fornecedor : d.empreiteiro) || {}).nome || '—') + '</div>' +
-          '<div><b>Obra</b><br>' + esc(d.obra || '—') + '</div>' +
-          '<div><b>' + (ehOC ? 'Prazo de entrega' : 'Início') + '</b><br>' + esc(ehOC ? (d.prazoEntrega || '—') : fmt.data(d.dataInicio)) + '</div>' +
+          '<div><b>Fornecedor</b><br>' + esc((d.fornecedor || {}).nome || '—') + '</div>' +
+          '<div><b>Destino</b><br>' + esc(d.obra || '—') + '</div>' +
+          '<div><b>Prazo de entrega</b><br>' + esc(d.prazoEntrega || '—') + '</div>' +
         '</div>' +
         '<div class="tabela-rolagem" style="margin-top:14px"><table><thead><tr><th>#</th><th>Descrição</th><th class="num">Qtd</th><th class="num">Unit.</th><th class="num">Total</th></tr></thead><tbody>' +
         (d.itens || []).map((i, n) => '<tr><td>' + (n + 1) + '</td><td>' + esc(i.descricao) +
@@ -1230,9 +1168,9 @@ async function telaVerPublico(args) {
         '</tbody><tfoot><tr><td colspan="4">Total</td><td class="num">' + fmt.brl(d.totalLiquido != null ? d.totalLiquido : d.total) + '</td></tr></tfoot></table></div>' +
         (d.observacoes ? '<p style="margin-top:12px"><b>Observações:</b> ' + esc(d.observacoes) + '</p>' : '') +
         '<div class="barra-acoes" style="margin-top:14px"><button class="btn primario" id="vPdf">Baixar em PDF</button></div>' +
-      '</div>', ehOC ? 'Ordem de compra' : 'Ordem de serviço');
+      '</div>', 'Ordem de compra');
     document.getElementById('vPdf').addEventListener('click', () => {
-      if (ehOC) pdfOC(d, r.cfg); else pdfOS(d, r.cfg);
+      pdfOC(d, r.cfg);
     });
   } catch (e) {
     molduraPublica('<div class="cartao"><div class="aviso ruim">' + esc(e.message) + '</div></div>', '');

@@ -1,7 +1,7 @@
 /* UI — peças que todas as telas usam: formatação, etiquetas, modal, aviso.
    Tudo que vem do usuário passa por esc() antes de virar HTML. */
 
-/* Situações em que a ordem de compra ainda está para chegar na obra.
+/* Situações em que a ordem de compra ainda está para chegar na empresa.
    Uma constante só: menu, tela de recebimento e painel precisam concordar. */
 const SIT_ESPERANDO = ['enviada', 'confirmada', 'transito', 'parcial'];
 
@@ -62,7 +62,7 @@ const fmt = {
     if (d.length !== 14) return v || '';
     return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
   },
-  // Prestador pode ser PJ (CNPJ) ou pessoa física (CPF) — o mesmo campo serve
+  // Fornecedor pode ser PJ (CNPJ) ou pessoa física (CPF) — o mesmo campo serve
   // para os dois, então quem formata precisa reconhecer os dois.
   doc(v) {
     const d = String(v || '').replace(/\D/g, '');
@@ -141,7 +141,7 @@ function toast(msg, tipo = '') {
 /* ── Modal ─────────────────────────────────────────────────────────────────── */
 // Os modais ficam EMPILHADOS: abrir uma confirmação de dentro de um formulário
 // não pode apagar o que já foi digitado embaixo.
-// E o toque no fundo NÃO fecha: no canteiro, um toque torto ao rolar a tela
+// E o toque no fundo NÃO fecha: na fábrica, um toque torto ao rolar a tela
 // apagava o recebimento inteiro (fotos já enviadas inclusive).
 let _modalAberto = null;
 const _pilhaModais = [];
@@ -344,7 +344,7 @@ function lerCampos(raiz) {
 
 // Aceita "1.234,56", "1234.56" e também "1.200" (ponto de milhar sem centavos).
 // Sem o terceiro caso, uma quantidade de 1.200 sacos virava 1,2 — foi assim que
-// o recebimento chegou a gravar mil vezes menos do que chegou na obra.
+// o recebimento chegou a gravar mil vezes menos do que chegou na empresa.
 function numeroBR(v) {
   if (typeof v === 'number') return v;
   // Tira "R$", "kg", "un" e qualquer outro enfeite: quem digita valor no
