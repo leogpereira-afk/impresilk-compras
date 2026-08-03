@@ -13,4 +13,4 @@ const API_ARQ = SUPABASE_URL + '/functions/v1/compras-acervo';
 const API_AUTH = SUPABASE_URL + '/functions/v1/equipe-auth';
 
 // Versão exibida no rodapé (subir junto com o CACHE do sw.js a cada deploy).
-const VERSAO = 'v8';
+const VERSAO = 'v9';

@@ -47,7 +47,7 @@ export const PERFIS: Record<string, {
 
 // Gestão de contas saiu daqui: quem cria/troca senha é a equipe-auth (Central).
 export const ACOES_DIRECAO = ["salvarCfg", "esvaziarLixeira", "reiniciarNumeracao",
-  "restaurar", "restaurarItem", "log", "backup"];
+  "restaurar", "restaurarItem", "log", "backup", "diagMubi", "fornecedoresMubi"];
 
 export const ACOES_NEGADAS_OBRA = ["apagar"];
 

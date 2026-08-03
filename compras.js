@@ -645,6 +645,21 @@ function editorOC(el, id, scId) {
           campo('Data de emissão', entrada('dataEmissao', oc.dataEmissao, { tipo: 'date' })) +
           campo('Entrega prevista', entrada('entregaPrevista', oc.entregaPrevista, { tipo: 'date' })) +
         '</div>' +
+        // Vincular a O.S. é OPCIONAL — compra de estoque não tem O.S. nenhuma.
+        // Quando tem, o pedido passa a saber para qual trabalho do cliente foi
+        // aquele material: é o que responde "quanto custou essa fachada".
+        '<div class="linha">' +
+          campo('Nº da O.S. (opcional)', entrada('osNumero', (oc.os || {}).numero || '',
+            { placeholder: 'ex.: 22826', inputmode: 'numeric' }),
+            'Liga a compra ao trabalho do cliente. Deixe vazio se for compra de estoque.') +
+          '<div class="campo"><label>&nbsp;</label>' +
+            '<button class="btn" id="ocBuscarOS" type="button">🔎 Buscar O.S.</button></div>' +
+        '</div>' +
+        '<div id="ocOsInfo">' + (oc.os && oc.os.numero
+          ? '<div class="aviso bom" style="text-align:left"><strong>O.S. ' + esc(oc.os.numero) + ' — ' +
+            esc(oc.os.cliente || 'sem cliente') + '</strong>' +
+            (oc.os.servico ? '<br>' + esc(oc.os.servico) : '') + '</div>'
+          : '') + '</div>' +
         '<div class="linha">' +
           campo('Local de entrega', entrada('localEntrega', oc.localEntrega, { placeholder: 'Ex.: fábrica — Rua X, 100' })) +
           campo('Prazo de entrega', entrada('prazoEntrega', oc.prazoEntrega, { placeholder: 'Ex.: 10 dias úteis' })) +
@@ -711,6 +726,39 @@ function editorOC(el, id, scId) {
     S.formAberto = false;
     irPara(existente ? 'compras/' + existente.id : 'compras');
   });
+
+  // Buscar a O.S. aqui dentro. Guarda em _osOC e só entra no registro quando a
+  // pessoa salva — abrir a busca e desistir não pode mudar a ordem.
+  let _osOC = (oc.os && oc.os.numero) ? oc.os : null;
+  const bOS = document.getElementById('ocBuscarOS');
+  if (bOS) bOS.addEventListener('click', async () => {
+    const campoNum = document.querySelector('#fOC [data-campo="osNumero"]');
+    const info = document.getElementById('ocOsInfo');
+    const numero = String((campoNum && campoNum.value) || '').replace(/\D/g, '');
+    if (!numero) { info.innerHTML = '<div class="aviso ruim">Digite o número da O.S.</div>'; return; }
+    info.innerHTML = '<div class="aviso info">Buscando O.S. ' + esc(numero) + '…</div>';
+    bOS.disabled = true;
+    try {
+      const r = await api('buscarOS', { numero });
+      bOS.disabled = false;
+      if (!r.os) {
+        _osOC = null;
+        info.innerHTML = '<div class="aviso ruim">O.S. ' + esc(numero) +
+          ' não encontrada (o PCP importa do Mubisys de hora em hora).</div>';
+        return;
+      }
+      _osOC = r.os;
+      info.innerHTML = '<div class="aviso bom" style="text-align:left">' +
+        '<strong>O.S. ' + esc(r.os.numero) + ' — ' + esc(r.os.cliente || 'sem cliente') + '</strong>' +
+        (r.os.servico ? '<br>' + esc(r.os.servico) : '') +
+        (r.os.previsaoEntrega ? '<br><small>entrega prevista ' + esc(fmt.data(r.os.previsaoEntrega)) + '</small>' : '') +
+        '</div>';
+    } catch (e) {
+      bOS.disabled = false;
+      info.innerHTML = '<div class="aviso ruim">' + esc(e.message) + '</div>';
+    }
+  });
+
   document.getElementById('salvarOC').addEventListener('click', () => {
     const d = lerCampos(document.getElementById('fOC'));
     const itens = lerItens(caixa, true);
@@ -725,6 +773,16 @@ function editorOC(el, id, scId) {
       ipiPerc: numeroBR(d.ipiPerc), icmsPerc: numeroBR(d.icmsPerc),
       frete: numeroBR(d.frete), seguro: numeroBR(d.seguro), desconto: numeroBR(d.desconto)
     });
+    // Vínculo com a O.S.: só vale o que foi CONFERIDO na busca. Número digitado
+    // e não encontrado não vira vínculo — meia ligação é pior que nenhuma,
+    // porque a compra apareceria no custo de um trabalho que não é dela.
+    const numDigitado = String(d.osNumero || '').replace(/\D/g, '');
+    delete novo.osNumero;
+    let osNaoConferida = false;
+    if (!numDigitado) delete novo.os;
+    else if (_osOC && String(_osOC.numero) === numDigitado) novo.os = _osOC;
+    else if (oc.os && String(oc.os.numero) === numDigitado) novo.os = oc.os;
+    else { delete novo.os; osNaoConferida = true; }
     const t = totaisOC(novo);
     novo.total = t.total;
     novo.totalLiquido = t.totalLiquido;
@@ -778,7 +836,14 @@ function editorOC(el, id, scId) {
     }
     S.formAberto = false;
     irPara('compras/' + salvo.id);
-    toast('Ordem de compra salva', 'bom');
+    // O número digitado e não conferido não vira vínculo — mas some em
+    // silêncio se ninguém avisar, e a compra ficaria fora do custo daquele
+    // trabalho sem nenhum sinal na tela.
+    if (osNaoConferida) {
+      toast('Ordem salva, mas a O.S. ' + numDigitado + ' não foi conferida — aperte "Buscar O.S." para ligar a compra a ela', 'ruim');
+    } else {
+      toast('Ordem de compra salva', 'bom');
+    }
   });
 }
 
@@ -1119,6 +1184,134 @@ function editarPessoaEquipe(id) {
         toast(p ? 'Pessoa atualizada' : 'Pessoa cadastrada', 'bom');
       } }
     ]
+  });
+}
+
+/* ── Trazer os fornecedores do Mubisys ──────────────────────────────────────
+   O ERP tem 1299 cadastros em /fornecedor. Importar todos de uma vez encheria
+   a agenda de quem nunca vendeu nada para a Impresilk — e depois ninguém acha
+   ninguém. Então: vem tudo para a tela, mas a pessoa ESCOLHE.
+
+   Duas ajudas para não escolher no escuro: já vem marcado só quem está Ativo no
+   ERP, e quem já está no cadastro daqui aparece separado, sem caixa de marcar
+   (casando por CNPJ, não por nome — nome tem grafia, CNPJ não).
+
+   Página por página, de propósito: o Mubisys leva 25-40s por requisição. */
+let _mubiCache = null;   // vale enquanto o modal está aberto
+
+async function trazerFornecedoresDoMubi() {
+  const jaTenho = new Set(fornecedoresAtivos()
+    .map((f) => String(f.cnpj || '').replace(/\D/g, '')).filter(Boolean));
+
+  const fundo = abrirModal({
+    titulo: 'Trazer fornecedores do Mubisys',
+    largo: true,
+    corpo: '<div id="mubiCorpo"><div class="aviso info">Falando com o Mubisys… ' +
+      'O ERP é lento (25 a 40 segundos por página) — pode deixar aberto.</div></div>',
+    acoes: [{ texto: 'Fechar', aoClicar: () => fecharModal() }]
+  });
+  const corpo = fundo.querySelector('#mubiCorpo');
+
+  const buscar = async (pagina) => {
+    const r = await api('fornecedoresMubi', { pagina });
+    if (!r.ok) throw new Error(r.error || 'O Mubisys não respondeu');
+    return r;
+  };
+
+  let todos = [], paginas = 1, total = 0;
+  try {
+    if (_mubiCache) { todos = _mubiCache.todos; paginas = _mubiCache.paginas; total = _mubiCache.total; }
+    else {
+      let p = 1;
+      for (;;) {
+        corpo.innerHTML = '<div class="aviso info">Trazendo do Mubisys — página ' + p +
+          (paginas > 1 ? ' de ' + paginas : '') + '…</div>';
+        const r = await buscar(p);
+        todos = todos.concat(r.fornecedores);
+        paginas = r.paginas; total = r.total;
+        if (!r.temMais) break;
+        p += 1;
+      }
+      _mubiCache = { todos, paginas, total };
+    }
+  } catch (e) {
+    corpo.innerHTML = '<div class="aviso ruim">' + esc(e.message) + '</div>';
+    return;
+  }
+
+  const novos = todos.filter((f) => !f.cnpj || !jaTenho.has(f.cnpj));
+  const repetidos = todos.length - novos.length;
+
+  const desenhar = () => {
+    const busca = (document.getElementById('mubiBusca') || {}).value || '';
+    const soAtivos = (document.getElementById('mubiSoAtivos') || {}).checked !== false;
+    const chave = busca.trim().toLowerCase();
+    const vendo = novos.filter((f) =>
+      (!soAtivos || f.ativoNoErp) &&
+      (!chave || (f.nome + ' ' + f.fantasia + ' ' + f.cnpj + ' ' + f.categorias).toLowerCase().includes(chave)));
+
+    document.getElementById('mubiLista').innerHTML = vendo.length
+      ? '<div class="tabela-rolagem" style="max-height:46vh"><table><thead><tr>' +
+        '<th style="width:34px"></th><th>Fornecedor</th><th>CNPJ/CPF</th><th>Contato</th><th>Situação</th>' +
+        '</tr></thead><tbody>' +
+        vendo.map((f) =>
+          '<tr><td><input type="checkbox" data-mubi="' + esc(f.idMubi) + '"' +
+            (f.ativoNoErp ? ' checked' : '') + '></td>' +
+          '<td><b>' + esc(f.nome) + '</b>' +
+            (f.fantasia && f.fantasia !== f.nome ? '<div class="meta">' + esc(f.fantasia) + '</div>' : '') + '</td>' +
+          '<td>' + esc(fmt.doc(f.cnpj) || '—') + '</td>' +
+          '<td>' + esc(f.contato || '—') +
+            (f.telefone ? '<div class="meta">' + esc(fmt.telefone(f.telefone)) + '</div>' : '') + '</td>' +
+          '<td>' + (f.ativoNoErp ? '<span class="etiqueta et-valido">ativo</span>'
+                                 : '<span class="etiqueta">inativo no ERP</span>') + '</td></tr>').join('') +
+        '</tbody></table></div>'
+      : '<p class="legenda">Nada com esse filtro.</p>';
+    document.getElementById('mubiConta').textContent = vendo.length + ' na lista';
+  };
+
+  corpo.innerHTML =
+    '<p class="legenda">' + total + ' cadastro(s) no Mubisys' +
+      (repetidos ? ' · ' + repetidos + ' já está(ão) aqui (conferido pelo CNPJ)' : '') + '</p>' +
+    '<div class="linha">' +
+      '<div class="campo"><label>Procurar</label>' +
+        '<input type="text" id="mubiBusca" placeholder="nome, CNPJ ou atividade"></div>' +
+      '<div class="campo"><label>&nbsp;</label><label class="opcao">' +
+        '<input type="checkbox" id="mubiSoAtivos" checked> Só os ativos no ERP</label></div>' +
+    '</div>' +
+    '<div class="barra-acoes" style="margin:6px 0">' +
+      '<button class="btn pequeno" id="mubiTodos">Marcar os da lista</button>' +
+      '<button class="btn pequeno" id="mubiNenhum">Desmarcar</button>' +
+      '<span class="legenda" id="mubiConta" style="margin-left:auto"></span>' +
+    '</div>' +
+    '<div id="mubiLista"></div>' +
+    '<div class="barra-acoes" style="margin-top:12px">' +
+      '<button class="btn primario" id="mubiImportar">Trazer os marcados</button>' +
+    '</div>';
+
+  desenhar();
+  document.getElementById('mubiBusca').addEventListener('input', desenhar);
+  document.getElementById('mubiSoAtivos').addEventListener('change', desenhar);
+  document.getElementById('mubiTodos').addEventListener('click', () =>
+    corpo.querySelectorAll('[data-mubi]').forEach((x) => { x.checked = true; }));
+  document.getElementById('mubiNenhum').addEventListener('click', () =>
+    corpo.querySelectorAll('[data-mubi]').forEach((x) => { x.checked = false; }));
+
+  document.getElementById('mubiImportar').addEventListener('click', () => {
+    const ids = new Set(Array.from(corpo.querySelectorAll('[data-mubi]:checked')).map((x) => x.dataset.mubi));
+    const escolhidos = novos.filter((f) => ids.has(f.idMubi));
+    if (!escolhidos.length) { toast('Marque pelo menos um', 'ruim'); return; }
+    for (const f of escolhidos) {
+      salvar('forn', {
+        nome: f.nome, cnpj: f.cnpj, ie: f.ie, contato: f.contato,
+        telefone: f.telefone, email: f.email, endereco: f.endereco,
+        categorias: f.categorias, ativo: true,
+        // De onde veio, para não importar duas vezes o mesmo e para dar
+        // caminho de volta ao ERP quando alguém desconfiar de um dado.
+        origemMubi: f.idMubi
+      });
+    }
+    fecharEste(fundo); render();
+    toast(escolhidos.length + ' fornecedor(es) trazido(s) do Mubisys', 'bom');
   });
 }
 
@@ -1745,7 +1938,8 @@ TELAS.fornecedores = function (el, args) {
   cabecalho('Fornecedores',
     fs.length + ' fornecedor(es) · ' + eq.length + ' pessoa(s) que pede(m) material',
     _abaForn === 'mat'
-      ? '<button class="btn primario" id="novoForn">+ Novo fornecedor</button>'
+      ? (podeVer('config') ? '<button class="btn" id="trazerMubi">⬇️ Trazer do Mubisys</button>' : '') +
+        '<button class="btn primario" id="novoForn">+ Novo fornecedor</button>'
       : '<button class="btn primario" id="novaPessoa">+ Nova pessoa</button>');
 
   el.innerHTML =
@@ -1767,6 +1961,8 @@ TELAS.fornecedores = function (el, args) {
   }
 
   document.getElementById('novoForn').addEventListener('click', () => editarFornecedor(null));
+  const bm = document.getElementById('trazerMubi');
+  if (bm) bm.addEventListener('click', trazerFornecedoresDoMubi);
   el.querySelectorAll('tr[data-ficha]').forEach((tr) => tr.addEventListener('click', (e) => {
     if (e.target.closest('button')) return;   // Zap e Editar continuam valendo
     irPara('fornecedores/' + tr.dataset.ficha);

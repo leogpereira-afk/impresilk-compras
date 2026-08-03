@@ -335,8 +335,10 @@ Deno.serve(async (req) => {
   // 'list' devolve o banco CRU, sem a máscara de leitura — então nem todo mundo
   // logado pode chamá-lo: um solicitante levaria por essa porta todos os preços
   // que a tela dele esconde. Fica com o backup e com a direção.
-  const DO_BACKUP = ["list", "getCfg"];
+  const DO_BACKUP = ["list", "getCfg", "diagMubi", "fornecedoresMubi"];
   if (DO_BACKUP.includes(action)) {
+    // getCfg: qualquer um logado. 'list' devolve o banco cru e 'diagMubi' fala
+    // com o ERP — essas duas ficam com a direção (ou com o token de servidor).
     const podeVerTudo = action === "getCfg" ? autenticado : perfilDe(quem) === "direcao";
     if (!ehBackup && !podeVerTudo) return json({ error: "Não autorizado" }, 401);
   } else if (!PUBLICAS.includes(action) && !autenticado) {
@@ -354,6 +356,129 @@ Deno.serve(async (req) => {
       // em massa sem deixar rastro. Quem quer conferir a senha usa 'entrar'.
       case "ping":
         return json({ ok: true, runtime: "supabase" });
+
+      /* ── Fornecedores do Mubisys ────────────────────────────────────────────
+         Sonda quais endereços da API existem. O kit de conexão só documenta
+         ordem-servico e contas-pagar; em vez de chutar o caminho e receber 404
+         em silêncio, o servidor pergunta e RELATA — depois a importação é
+         escrita em cima do que respondeu de verdade.
+         Só a direção chama isto (é diagnóstico, e o ERP é lento). */
+      case "diagMubi": {
+        const BASE = Deno.env.get("MUBI_BASE_URL") ?? "https://api.mubisys.com/api";
+        const KEY = Deno.env.get("MUBI_PUBLIC_KEY") ?? "";
+        const TK = Deno.env.get("MUBI_TOKEN") ?? "";
+        if (!KEY || !TK) return json({ ok: false, error: "Credenciais do Mubisys não configuradas neste projeto." }, 503);
+
+        const caminhos: string[] = Array.isArray(body.caminhos) && body.caminhos.length
+          ? body.caminhos.slice(0, 8).map(String)
+          : ["fornecedor", "fornecedores", "pessoa", "pessoas", "cliente", "clientes"];
+
+        const saida: any[] = [];
+        for (const c of caminhos) {
+          const url = `${BASE}/${KEY}/${c}`;
+          try {
+            const r = await fetch(url, { headers: { Accept: "application/json", "Access-Token": TK } });
+            const txt = await r.text();
+            let amostra: any = null;
+            try {
+              const j = JSON.parse(txt);
+              const arr = Array.isArray(j) ? j : (j.data ?? j.items ?? null);
+              amostra = Array.isArray(arr)
+                ? { quantos: arr.length, campos: arr[0] ? Object.keys(arr[0]).slice(0, 30) : [],
+                    envelope: Array.isArray(j) ? null : Object.keys(j).slice(0, 12),
+                    paginacao: Array.isArray(j) ? null : j.pagination,
+                    primeiro: body.inteiro ? arr[0] : undefined }
+                : { chaves: Object.keys(j).slice(0, 20) };
+            } catch { amostra = { texto: txt.slice(0, 160) }; }
+            saida.push({ caminho: c, status: r.status, amostra });
+          } catch (e) {
+            saida.push({ caminho: c, erro: String((e as Error).message).slice(0, 120) });
+          }
+        }
+        return json({ ok: true, base: BASE, resultados: saida });
+      }
+
+      /* ── Trazer os fornecedores do Mubisys ──────────────────────────────────
+         O ERP tem 1299 entidades cadastradas em /fornecedor, 500 por página.
+         Uma página POR CHAMADA, de propósito: o Mubisys leva 25-40s por
+         requisição e a função tem tempo limitado — varrer tudo aqui dentro
+         morreria no meio e perderia até o que já tinha vindo. O app pede
+         página a página, mostra o progresso e pode parar.
+
+         Aqui só LÊ e devolve; quem grava é o comprador, escolhendo na tela.
+         Importar 1299 cadastros de uma vez encheria a agenda de quem nunca
+         vendeu nada para a Impresilk. */
+      case "fornecedoresMubi": {
+        const BASE = Deno.env.get("MUBI_BASE_URL") ?? "https://api.mubisys.com/api";
+        const KEY = Deno.env.get("MUBI_PUBLIC_KEY") ?? "";
+        const TK = Deno.env.get("MUBI_TOKEN") ?? "";
+        if (!KEY || !TK) return json({ ok: false, error: "Credenciais do Mubisys não configuradas neste projeto." }, 503);
+
+        const pagina = Math.max(1, Number(body.pagina ?? 1) || 1);
+        const caminho = body.caminho === "cliente" ? "cliente" : "fornecedor";
+        const r = await fetch(`${BASE}/${KEY}/${caminho}?page=${pagina}&per_page=500`,
+          { headers: { Accept: "application/json", "Access-Token": TK } });
+        // O Mubisys responde 201 no sucesso; 200 também é aceito por segurança.
+        if (r.status !== 201 && r.status !== 200) {
+          const corpo = await r.text().catch(() => "");
+          return json({ ok: false, error: `Mubisys respondeu ${r.status}: ${corpo.slice(0, 160)}` }, 502);
+        }
+        const j = await r.json();
+        const lista = Array.isArray(j) ? j : (j.data ?? []);
+        const pag = j.pagination ?? {};
+
+        const soDig = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+        // O ERP guarda telefone como +5538988152550; o app trabalha com o
+        // número nacional, e é assim que o WhatsApp é montado no resto do sistema.
+        const telBR = (v: unknown) => {
+          const d = soDig(v);
+          if (d.length > 11 && d.slice(0, 2) === "55") {
+            const sem = d.slice(2);
+            if (sem.length === 10 || sem.length === 11) return sem;
+          }
+          return d;
+        };
+        const primeiro = (arr: any, quando: (x: any) => boolean) => {
+          const l = Array.isArray(arr) ? arr : [];
+          return l.find(quando) ?? l[0] ?? null;
+        };
+
+        const fornecedores = lista.map((f: any) => {
+          // Prefere o contato/endereço marcado como financeiro: é quem manda
+          // nota e cobrança, e é o dado que o comprador precisa ter à mão.
+          const ct = primeiro(f.contatos, (c: any) => String(c?.contato_financeiro) === "Sim");
+          const en = primeiro(f.enderecos, (e: any) => String(e?.endereco_financeiro) === "Sim");
+          const endereco = en
+            ? [en.logradouro, en.numero, en.bairro].filter(Boolean).join(", ") +
+              (en.cidade ? " — " + en.cidade + (en.estado ? "/" + en.estado : "") : "")
+            : "";
+          return {
+            idMubi: String(f.id ?? ""),
+            nome: String(f.razao_social || f.nome_fantasia || "").trim(),
+            fantasia: String(f.nome_fantasia ?? "").trim(),
+            cnpj: soDig(f.cnpj_cpf),
+            ie: String(f.inscricao_estadual ?? "").trim(),
+            im: String(f.inscricao_municipal ?? "").trim(),
+            contato: String((ct && ct.nome_contato) || "").trim(),
+            telefone: telBR((ct && ct.celular) || f.telefone_pri || f.telefone_sec),
+            email: String((ct && ct.email) || f.email || "").trim(),
+            endereco,
+            cep: String((en && en.cep) || "").trim(),
+            categorias: String(f.atividade ?? "").trim(),
+            classificacao: String(f.classificacao ?? "").trim(),
+            ativoNoErp: String(f.status ?? "") === "Ativo",
+          };
+        }).filter((f: any) => f.nome);
+
+        return json({
+          ok: true,
+          pagina: Number(pag.current_page ?? pagina),
+          paginas: Number(pag.last_page ?? 1),
+          total: Number(pag.total ?? fornecedores.length),
+          temMais: Number(pag.current_page ?? pagina) < Number(pag.last_page ?? 1),
+          fornecedores,
+        });
+      }
 
       // ── Vínculo com a O.S. do Mubisys ──────────────────────────────────────
       // O PCP importa as O.S. do ERP de hora em hora para o MESMO banco
@@ -567,7 +692,7 @@ Deno.serve(async (req) => {
         // LISTA BRANCA (nunca lista negra): só sai o que o documento precisa
         // mostrar. Lista negra sempre fica para trás quando um módulo novo passa
         // a guardar campo novo dentro do mesmo registro.
-        const campos = ["id", "codigo", "situacao", "obra", "dataEmissao", "entregaPrevista", "fornecedor",
+        const campos = ["id", "codigo", "situacao", "obra", "os", "dataEmissao", "entregaPrevista", "fornecedor",
           "localEntrega", "prazoEntrega", "validadeProposta", "modalidade", "condicaoPagamento",
           "formaPagamento", "dadosBancarios", "garantia", "notaFiscalObrigatoria", "itens",
           "ipiPerc", "icmsPerc", "frete", "seguro", "desconto", "total", "totalLiquido", "observacoes"];

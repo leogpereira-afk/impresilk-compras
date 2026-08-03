@@ -200,7 +200,10 @@ async function pdfOC(o, cfg) {
   y = blocoCampos(doc, y, [
     ['Fornecedor', f.nome], ['CNPJ', fmt.cnpj(f.cnpj)], ['Inscrição estadual', f.ie],
     ['Contato / representante', f.contato], ['Telefone', fmt.telefone(f.telefone)], ['E-mail', f.email],
-    ['Endereço', f.endereco], ['Destino', o.obra || ''], ['Data de emissão', fmt.data(o.dataEmissao)]
+    ['Endereço', f.endereco], ['Destino', o.obra || ''], ['Data de emissão', fmt.data(o.dataEmissao)],
+    // Quando a compra é para um trabalho de cliente, o número da O.S. vai
+    // impresso: é por ele que a nota do fornecedor é conferida depois.
+    ...((o.os && o.os.numero) ? [['O.S. / trabalho', o.os.numero + (o.os.cliente ? ' — ' + o.os.cliente : '')]] : [])
   ], 3);
 
   y = tituloSecao(doc, y + 2, 'Condições comerciais');

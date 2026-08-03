@@ -1264,7 +1264,8 @@ async function telaVerPublico(args) {
         '<p class="legenda">' + esc(r.cfg.empresa.nome) + (r.cfg.empresa.cnpj ? ' · CNPJ ' + esc(fmt.cnpj(r.cfg.empresa.cnpj)) : '') + '</p>' +
         '<div class="linha" style="margin-top:10px">' +
           '<div><b>Fornecedor</b><br>' + esc((d.fornecedor || {}).nome || '—') + '</div>' +
-          '<div><b>Destino</b><br>' + esc(d.obra || '—') + '</div>' +
+          '<div><b>Destino</b><br>' + esc(d.obra || '—') +
+            ((d.os && d.os.numero) ? '<div class="meta">O.S. ' + esc(d.os.numero) + '</div>' : '') + '</div>' +
           '<div><b>Prazo de entrega</b><br>' + esc(d.prazoEntrega || '—') + '</div>' +
         '</div>' +
         '<div class="tabela-rolagem" style="margin-top:14px"><table><thead><tr><th>#</th><th>Descrição</th><th class="num">Qtd</th><th class="num">Unit.</th><th class="num">Total</th></tr></thead><tbody>' +
