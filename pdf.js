@@ -236,6 +236,9 @@ async function pdfOC(o, cfg) {
     ['Soma dos materiais', t.total],
     o.ipiPerc ? ['IPI (' + fmt.numero(o.ipiPerc) + '%)', t.ipi] : null,
     o.icmsPerc ? ['ICMS / ST (' + fmt.numero(o.icmsPerc) + '%)', t.icms] : null,
+    // O DIFAL entra no total, então tem de aparecer no papel que vai para o
+    // fornecedor: linha somada e invisível é como a conferência da nota falha.
+    t.difal ? ['DIFAL', t.difal] : null,
     o.frete ? ['Frete', Number(o.frete)] : null,
     o.seguro ? ['Seguro', Number(o.seguro)] : null,
     o.desconto ? ['Desconto negociado', -Math.abs(Number(o.desconto))] : null

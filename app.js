@@ -189,6 +189,16 @@ function render() {
   if (!AUTH.temCracha()) { telaEntrar(); return; }
 
   montarShell();
+  // O <datalist> tem de existir no documento para o list= dos campos funcionar.
+  // Reescrito a cada render porque o catálogo pode ter acabado de ser trazido.
+  let dl = document.getElementById('caixaDatalist');
+  if (!dl) {
+    dl = document.createElement('div');
+    dl.id = 'caixaDatalist';
+    dl.hidden = true;
+    document.body.appendChild(dl);
+  }
+  dl.innerHTML = htmlDatalistProdutos();
   document.getElementById('app').style.display = '';
   pintarMenu(tela);
   const pagina = document.getElementById('pagina');
@@ -320,13 +330,22 @@ TELAS.painel = function (el) {
     (c.fornecedores || []).length && (c.fornecedores || []).every((f) => f.respondidoEm));
   const cotsVencidas = cotsAbertas.filter((c) => c.prazoResposta && diasAte(c.prazoResposta) < 0);
 
-  // Dinheiro: o do mês e o que está comprometido e ainda não chegou.
-  const inicioMesISO = hojeISO().slice(0, 8) + '01';
-  const doMes = ocs.filter((o) => !['cancelada', 'rascunho'].includes(o.situacao) &&
-    String(o.dataEmissao || o.criadoEm || '').slice(0, 10) >= inicioMesISO);
+  // Dinheiro do PERÍODO escolhido (antes era sempre "deste mês", sem dizer
+  // qual e sem deixar olhar outro -- no dia 1º o painel zerava e parecia que a
+  // empresa tinha parado de comprar).
+  const per = periodoAtual();
+  const doMes = ocs.filter((o) => !['cancelada', 'rascunho'].includes(o.situacao) && noPeriodo(o, per));
   const gastoMes = doMes.reduce((s, o) => s + (Number(o.totalLiquido) || 0), 0);
   const entregueMes = doMes.filter((o) => o.situacao === 'entregue')
     .reduce((s, o) => s + (Number(o.totalLiquido) || 0), 0);
+
+  // Como estão as ordens do período, uma etiqueta por situação. Clicar leva
+  // para a lista já filtrada -- o painel deixa de ser só leitura.
+  const ORDEM_SIT = ['rascunho', 'emitida', 'enviada', 'confirmada', 'transito', 'parcial', 'entregue', 'cancelada'];
+  const doPeriodoTodas = ocs.filter((o) => noPeriodo(o, per));
+  const porSituacao = ORDEM_SIT
+    .map((sit) => ({ sit, ocs: doPeriodoTodas.filter((o) => o.situacao === sit) }))
+    .filter((x) => x.ocs.length);
   const aChegar = emRota.reduce((s, o) => s + (Number(o.totalLiquido) || 0), 0);
 
   // ── O que precisa de decisão HOJE ─────────────────────────────────────────
@@ -351,6 +370,7 @@ TELAS.painel = function (el) {
   if (docsVencidos.length) tarefa('📘', docsVencidos.length + ' manual/documento vencido(s)', 'manuais', true);
 
   cabecalho('Painel', 'Visão geral das compras',
+    seletorPeriodo() +
     '<button class="btn" data-acao="linkObra">🔗 Link da empresa</button>' +
     (podeVer('cotacoes') ? '<a class="btn primario" href="#/cotacoes">Pedir cotação</a>' : ''));
 
@@ -366,12 +386,26 @@ TELAS.painel = function (el) {
         : '<p class="legenda">Nada parado esperando decisão.</p>') +
     '</div>' +
 
+    // ── como estão as compras do período ──
+    (podeVer('compras') && porSituacao.length
+      ? '<div class="cartao" style="margin-bottom:16px">' +
+        '<h3>📊 Ordens de ' + esc(rotuloPeriodo()) + '</h3>' +
+        '<div class="faixa-status">' +
+        porSituacao.map((x) =>
+          '<button class="chip-status" data-sit="' + esc(x.sit) + '">' +
+            etiqueta(x.sit) +
+            '<b>' + x.ocs.length + '</b>' +
+            '<span>' + esc(fmt.brl(x.ocs.reduce((s, o) => s + (Number(o.totalLiquido) || 0), 0))) + '</span>' +
+          '</button>').join('') +
+        '</div></div>'
+      : '') +
+
     // ── números ──
     // Quem é da empresa vê o movimento, não o dinheiro: o servidor nem manda os
     // valores para o aparelho dele, então aqui os cartões mudam de conteúdo.
     (podeVer('compras')
       ? '<div class="grade g3 compacto" style="margin-bottom:16px">' +
-        indicador('Comprado no mês', fmt.brl(gastoMes),
+        indicador('Comprado em ' + rotuloPeriodo(), fmt.brl(gastoMes),
           doMes.length + ' ordem(ns) · ' + fmt.brl(entregueMes) + ' já entregue', '', 'compras') +
         indicador('A caminho', fmt.brl(aChegar),
           emRota.length + ' ordem(ns)' + (atrasadas.length ? ' · ' + atrasadas.length + ' atrasada(s)' : ' no prazo'),
@@ -380,7 +414,7 @@ TELAS.painel = function (el) {
           'esperando aprovação', '', 'solicitacoes') +
       '</div>'
       : '<div class="grade g3 compacto" style="margin-bottom:16px">' +
-        indicador('Pedido no mês', String(doMes.length), 'ordem(ns) de compra', '', '') +
+        indicador('Pedido em ' + rotuloPeriodo(), String(doMes.length), 'ordem(ns) de compra', '', '') +
         indicador('A caminho', String(emRota.length),
           atrasadas.length ? atrasadas.length + ' atrasada(s)' : 'no prazo',
           atrasadas.length ? 'alerta' : '', 'recebimento') +
@@ -437,6 +471,13 @@ TELAS.painel = function (el) {
       }).join('') + '</tbody></table></div>' : '');
 
   el.querySelectorAll('[data-ir]').forEach((n) => n.addEventListener('click', () => irPara(n.dataset.ir)));
+  ligarSeletorPeriodo();
+  // Clicar numa situação abre a lista de ordens JÁ FILTRADA por ela: o número
+  // do painel e a lista passam a ser a mesma coisa vista de dois jeitos.
+  el.querySelectorAll('[data-sit]').forEach((b) => b.addEventListener('click', () => {
+    S.filtroOC = Object.assign({ busca: '' }, S.filtroOC, { situacao: b.dataset.sit });
+    irPara('compras');
+  }));
   document.querySelectorAll('[data-acao="linkObra"]').forEach((b) => b.addEventListener('click', mostrarLinkObra));
 };
 

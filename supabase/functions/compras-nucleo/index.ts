@@ -480,6 +480,55 @@ Deno.serve(async (req) => {
         });
       }
 
+      // ── Catálogo de produtos do Mubisys ────────────────────────────────────
+      // Quem pede material digitava a descrição do zero, e a mesma chapa
+      // aparecia como "ACM 3mm", "acm 3 mm branco" e "Chapa ACM". Depois nada
+      // casa: nem o histórico de quem já vendeu aquilo, nem a comparação de
+      // preço entre cotações.
+      //
+      // O ERP já tem o catálogo (mesmo recurso que o Painel usa para as
+      // categorias de produto). Aqui ele vira uma lista enxuta que o app guarda
+      // e usa para completar a digitação -- sugestão, nunca amarra: material
+      // que não está no catálogo continua sendo digitado à mão.
+      case "produtosMubi": {
+        const BASE = Deno.env.get("MUBI_BASE_URL") ?? "https://api.mubisys.com/api";
+        const KEY = Deno.env.get("MUBI_PUBLIC_KEY") ?? "";
+        const TK = Deno.env.get("MUBI_TOKEN") ?? "";
+        if (!KEY || !TK) return json({ ok: false, error: "Credenciais do Mubisys não configuradas neste projeto." }, 503);
+
+        const pagina = Math.max(1, Number(body.pagina ?? 1) || 1);
+        const r = await fetch(`${BASE}/${KEY}/produto?page=${pagina}&per_page=500`,
+          { headers: { Accept: "application/json", "Access-Token": TK } });
+        // O Mubisys responde 201 no sucesso; 200 também é aceito por segurança.
+        if (r.status !== 201 && r.status !== 200) {
+          const corpo = await r.text().catch(() => "");
+          return json({ ok: false, error: `Mubisys respondeu ${r.status}: ${corpo.slice(0, 160)}` }, 502);
+        }
+        const j = await r.json();
+        const lista = Array.isArray(j) ? j : (j.data ?? []);
+        const pag = j.pagination ?? {};
+
+        const produtos = lista.map((p: any) => ({
+          idMubi: String(p.id ?? ""),
+          nome: String(p.nome ?? p.descricao ?? "").trim(),
+          codigo: String(p.codigo ?? p.referencia ?? "").trim(),
+          categoria: String(p.categoria ?? "").trim(),
+          unidade: String(p.unidade ?? p.unidade_medida ?? "").trim(),
+          // Preço de VENDA do catálogo. Serve de referência para quem compra
+          // ("isso costuma sair por quanto?"), nunca como preço de compra.
+          valorVenda: Number(p.valor ?? p.valor_venda ?? 0) || 0,
+        })).filter((p: any) => p.nome);
+
+        return json({
+          ok: true,
+          pagina: Number(pag.current_page ?? pagina),
+          paginas: Number(pag.last_page ?? 1),
+          total: Number(pag.total ?? produtos.length),
+          temMais: Number(pag.current_page ?? pagina) < Number(pag.last_page ?? 1),
+          produtos,
+        });
+      }
+
       // ── Vínculo com a O.S. do Mubisys ──────────────────────────────────────
       // O PCP importa as O.S. do ERP de hora em hora para o MESMO banco
       // (pcp_registros). Ler dali é mais rápido e mais confiável do que chamar

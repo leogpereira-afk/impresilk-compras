@@ -120,12 +120,75 @@ function sugerirFornecedores(itens, limite = 6) {
 }
 
 // Linha de item usada nos formulários (com ou sem preço).
+/* ── Catálogo de produtos do ERP ────────────────────────────────────────────
+   Quem pede material digitava do zero, e a mesma chapa virava "ACM 3mm",
+   "acm 3 mm branco" e "Chapa ACM". Depois nada casa: nem o histórico de quem
+   já vendeu aquilo, nem a comparação de preço entre cotações.
+
+   O catálogo fica GUARDADO no aparelho (o ERP leva 25-40s por página; buscar
+   a cada digitação seria insuportável) e é atualizado quando a pessoa manda.
+   É sugestão, nunca amarra: material fora do catálogo continua sendo digitado
+   à mão -- compra de emergência não espera cadastro no ERP. */
+const K_CATALOGO = 'compras_catalogo_v1';
+
+function catalogoProdutos() {
+  if (S._catalogo) return S._catalogo;
+  try {
+    const cru = JSON.parse(localStorage.getItem(K_CATALOGO) || 'null');
+    S._catalogo = cru && Array.isArray(cru.produtos) ? cru : { produtos: [], em: '' };
+  } catch { S._catalogo = { produtos: [], em: '' }; }
+  return S._catalogo;
+}
+
+function htmlDatalistProdutos() {
+  const c = catalogoProdutos();
+  if (!c.produtos.length) return '';
+  return '<datalist id="catalogoProdutos">' +
+    c.produtos.slice(0, 2000).map((p) =>
+      '<option value="' + esc(p.nome) + '">' + esc([p.codigo, p.categoria].filter(Boolean).join(' · ')) + '</option>'
+    ).join('') + '</datalist>';
+}
+
+async function trazerProdutosDoMubi() {
+  const fundo = abrirModal({
+    titulo: 'Trazer catálogo do Mubisys',
+    corpo: '<div id="prodCorpo"><div class="aviso info">Falando com o Mubisys… ' +
+      'O ERP é lento (25 a 40 segundos por página) — pode deixar aberto.</div></div>',
+    acoes: [{ texto: 'Fechar', aoClicar: () => fecharModal() }]
+  });
+  const corpo = fundo.querySelector('#prodCorpo');
+  try {
+    let todos = [], p = 1, paginas = 1;
+    for (;;) {
+      corpo.innerHTML = '<div class="aviso info">Trazendo — página ' + p +
+        (paginas > 1 ? ' de ' + paginas : '') + '…</div>';
+      const r = await api('produtosMubi', { pagina: p });
+      if (!r.ok) throw new Error(r.error || 'O Mubisys não respondeu');
+      todos = todos.concat(r.produtos || []);
+      paginas = r.paginas || 1;
+      if (!r.temMais || p >= 40) break;
+      p++;
+    }
+    // Mesmo nome repetido no ERP vira uma sugestão só.
+    const porNome = new Map();
+    for (const x of todos) if (x.nome && !porNome.has(x.nome.toLowerCase())) porNome.set(x.nome.toLowerCase(), x);
+    const catalogo = { produtos: [...porNome.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')), em: new Date().toISOString() };
+    S._catalogo = catalogo;
+    try { localStorage.setItem(K_CATALOGO, JSON.stringify(catalogo)); } catch { /* aparelho cheio: fica só em memória */ }
+    corpo.innerHTML = '<div class="aviso bom">' + catalogo.produtos.length +
+      ' produto(s) no catálogo. Agora eles aparecem enquanto você digita o material.</div>';
+  } catch (e) {
+    corpo.innerHTML = '<div class="aviso ruim">' + esc(e.message || 'Falha ao trazer o catálogo') + '</div>';
+  }
+}
+
 function linhaItem(it = {}, comPreco = false) {
   const uns = unidades();
   return '<div class="item-linha' + (comPreco ? ' com-preco' : '') + '" data-item' +
     (it.id ? ' data-id="' + esc(it.id) + '"' : '') + '>' +
     '<div class="campo descricao"><label>Descrição</label>' +
-      '<input type="text" data-i="descricao" value="' + esc(it.descricao || '') + '" placeholder="Material / serviço"></div>' +
+      '<input type="text" data-i="descricao" value="' + esc(it.descricao || '') + '" placeholder="Material / serviço"' +
+      (catalogoProdutos().produtos.length ? ' list="catalogoProdutos"' : '') + '></div>' +
     '<div class="campo"><label>Unid.</label><select data-i="unid">' +
       uns.map((u) => '<option' + (u === (it.unid || 'un') ? ' selected' : '') + '>' + esc(u) + '</option>').join('') +
     '</select></div>' +
@@ -168,10 +231,18 @@ function ligarItens(caixa, comPreco) {
 /* ── Totais da ordem de compra ─────────────────────────────────────────────── */
 function totaisOC(oc) {
   const total = (oc.itens || []).reduce((s, i) => s + (Number(i.qtd) || 0) * (Number(i.preco) || 0), 0);
+  // IPI e ICMS/ST em porcentagem saíram da tela em 05/08/2026 — quem compra
+  // aqui não digita alíquota, e campo que ninguém preenche vira zero mudo no
+  // total. Continuam sendo LIDOS para não mudar o valor das ordens antigas.
   const ipi = total * (Number(oc.ipiPerc) || 0) / 100;
   const icms = total * (Number(oc.icmsPerc) || 0) / 100;
-  const liquido = total + ipi + icms + (Number(oc.frete) || 0) + (Number(oc.seguro) || 0) - Math.abs(Number(oc.desconto) || 0);
-  return { total, ipi, icms, totalLiquido: liquido };
+  // DIFAL é o caso real da casa: compra de fora do estado em que a diferença
+  // de alíquota é cobrada à parte. Quem compra sabe SE tem, e o valor vem na
+  // nota — então é uma marcação e um valor, não uma conta de alíquota.
+  const difal = oc.temDifal ? Math.abs(Number(oc.difalValor) || 0) : 0;
+  const liquido = total + ipi + icms + difal +
+    (Number(oc.frete) || 0) + (Number(oc.seguro) || 0) - Math.abs(Number(oc.desconto) || 0);
+  return { total, ipi, icms, difal, totalLiquido: liquido };
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -184,12 +255,20 @@ TELAS.solicitacoes = function (el, args) {
   const filtro = S.filtroSC || { situacao: '', obra: '', busca: '' };
   S.filtroSC = filtro;
 
-  const filtradas = todas.filter((s) =>
+  const doPeriodo = todas.filter((s) => noPeriodo(s));
+  const filtradas = doPeriodo.filter((s) =>
     (!filtro.situacao || s.situacao === filtro.situacao) &&
     (!filtro.obra || s.obraId === filtro.obra) &&
     (!filtro.busca || JSON.stringify(s).toLowerCase().includes(filtro.busca.toLowerCase())));
 
-  cabecalho('Solicitações de compra', todas.length + ' no total',
+  const ORDEM_SIT_SC = ['nova', 'aprovada', 'em_cotacao', 'em_compra', 'atendida', 'recusada'];
+  const porSit = ORDEM_SIT_SC
+    .map((sit) => ({ sit, n: doPeriodo.filter((x) => x.situacao === sit).length }))
+    .filter((x) => x.n);
+
+  cabecalho('Solicitações de compra',
+    doPeriodo.length + ' em ' + rotuloPeriodo() + ' · ' + todas.length + ' no total',
+    seletorPeriodo() +
     '<button class="btn" data-acao="linkObra">🔗 Link da empresa</button>' +
     '<button class="btn primario" id="scNova">+ Nova solicitação</button>');
 
@@ -204,6 +283,13 @@ TELAS.solicitacoes = function (el, args) {
         obras().map((o) => '<option value="' + esc(o.id) + '"' + (filtro.obra === o.id ? ' selected' : '') + '>' + esc(o.nome) + '</option>').join('') +
       '</select>' +
     '</div>' +
+    (porSit.length
+      ? '<div class="faixa-status" style="margin-bottom:12px">' +
+        '<button class="chip-status" data-sit="">' + '<span class="etiqueta">Todas</span><b>' + doPeriodo.length + '</b></button>' +
+        porSit.map((x) => '<button class="chip-status' + (filtro.situacao === x.sit ? ' ativo' : '') + '" data-sit="' + esc(x.sit) + '">' +
+          etiqueta(x.sit) + '<b>' + x.n + '</b></button>').join('') +
+        '</div>'
+      : '') +
     '<div class="cartao">' +
       (filtradas.length ?
         '<div class="tabela-rolagem"><table><thead><tr>' +
@@ -217,10 +303,13 @@ TELAS.solicitacoes = function (el, args) {
             '<td>' + esc(s.obra || nomeObra(s.obraId)) + '<div style="font-size:.8rem;color:var(--texto-fraco)">' + esc(s.setor || '') + '</div></td>' +
             '<td>' + (s.itens || []).length + '</td>' +
             '<td>' + etiqueta(s.situacao) + ' ' + etiquetaUrgencia(s.urgencia) + '</td>' +
-            '<td>' + fmt.quando(s.criadoEm) + '</td>' +
+            '<td>' + fmt.data(dataDoRegistro(s)) +
+              '<div style="font-size:.8rem;color:var(--texto-fraco)">' + esc(fmt.quando(s.criadoEm)) + '</div></td>' +
           '</tr>').join('') +
         '</tbody></table></div>'
-        : vazio('📋', 'Nenhuma solicitação', 'Mande o link da empresa para o pessoal pedir material.')) +
+        : vazio('📋', 'Nenhuma solicitação em ' + rotuloPeriodo(),
+            todas.length ? 'Troque o mês no alto da tela para ver as outras.'
+                         : 'Mande o link da empresa para o pessoal pedir material.')) +
     '</div>';
 
   el.querySelectorAll('tr[data-id]').forEach((tr) => tr.addEventListener('click', () => irPara('solicitacoes/' + tr.dataset.id)));
@@ -242,6 +331,10 @@ TELAS.solicitacoes = function (el, args) {
   });
   document.getElementById('scNova').addEventListener('click', novaSolicitacaoInterna);
   document.querySelectorAll('[data-acao="linkObra"]').forEach((b) => b.addEventListener('click', mostrarLinkObra));
+  ligarSeletorPeriodo();
+  el.querySelectorAll('[data-sit]').forEach((b) => b.addEventListener('click', () => {
+    filtro.situacao = b.dataset.sit; render();
+  }));
 };
 
 function novaSolicitacaoInterna() {
@@ -354,6 +447,64 @@ function ligarBuscaOS(caixaItens, ligarItem) {
   });
 }
 
+// Itens da solicitação em modo LEITURA.
+function htmlItensSC(s) {
+  return '<table><thead><tr><th>#</th><th>Material</th><th class="num">Qtd</th></tr></thead><tbody>' +
+    (s.itens || []).map((i, n) => '<tr><td>' + (n + 1) + '</td><td>' + esc(i.descricao) +
+      (i.obs ? '<div style="font-size:.8rem;color:var(--texto-fraco)">' + esc(i.obs) + '</div>' : '') +
+      (i.ajustadoDe ? '<div style="font-size:.8rem;color:var(--texto-fraco)">pedido original: ' +
+        esc(i.ajustadoDe) + '</div>' : '') + '</td>' +
+      '<td class="num">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</td></tr>').join('') +
+    '</tbody></table>';
+}
+
+// Modo EDIÇÃO: as mesmas linhas do formulário de pedido, reaproveitadas.
+function editarItensSC(s) {
+  const caixa = document.getElementById('itensSC');
+  if (!caixa) return;
+  caixa.innerHTML =
+    '<div id="linhasSC">' + (s.itens || []).map((i) => linhaItem(i)).join('') + '</div>' +
+    '<div class="barra-acoes" style="margin-top:8px">' +
+      '<button class="btn pequeno" id="scMaisItem" type="button">+ Item</button>' +
+      '<button class="btn primario pequeno" id="scSalvarItens" type="button">Salvar ajuste</button>' +
+      '<button class="btn fantasma pequeno" id="scCancelarItens" type="button">Cancelar</button>' +
+    '</div>' +
+    '<p class="legenda">O pedido original de quem solicitou fica registrado no histórico.</p>';
+
+  const linhas = document.getElementById('linhasSC');
+  // ligarItens já liga as linhas que existem e devolve o ligador das novas.
+  const ligar = ligarItens(linhas, false);
+  document.getElementById('scMaisItem').addEventListener('click', () => {
+    linhas.insertAdjacentHTML('beforeend', linhaItem());
+    ligar(linhas.lastElementChild);
+    linhas.lastElementChild.querySelector('input').focus();
+  });
+  document.getElementById('scCancelarItens').addEventListener('click', () => { caixa.innerHTML = htmlItensSC(s); });
+  document.getElementById('scSalvarItens').addEventListener('click', () => {
+    const novos = lerItens(linhas, false);
+    if (!novos.length) { toast('Deixe pelo menos um item', 'ruim'); return; }
+    const antes = (s.itens || []).map((i) => fmt.numero(i.qtd) + ' ' + (i.unid || '') + ' ' + i.descricao);
+    const depois = novos.map((i) => fmt.numero(i.qtd) + ' ' + (i.unid || '') + ' ' + i.descricao);
+    if (antes.join('|') === depois.join('|')) { caixa.innerHTML = htmlItensSC(s); return; }
+
+    // Guarda no item o texto original de quem pediu -- só na primeira vez, para
+    // um segundo ajuste não apagar o pedido de verdade.
+    const porId = new Map((s.itens || []).map((i) => [i.id, i]));
+    for (const i of novos) {
+      const orig = porId.get(i.id);
+      if (orig && !i.ajustadoDe && orig.descricao !== i.descricao) {
+        i.ajustadoDe = fmt.numero(orig.qtd) + ' ' + (orig.unid || '') + ' ' + orig.descricao;
+      } else if (orig && orig.ajustadoDe) i.ajustadoDe = orig.ajustadoDe;
+    }
+
+    const novo = Object.assign({}, s, { itens: novos });
+    novo.historico = historiar(s, 'Itens ajustados por quem compra. Antes: ' + antes.join('; '));
+    salvar('sc', novo);
+    toast('Itens ajustados', 'bom');
+    render();
+  });
+}
+
 function telaSolicitacao(el, id) {
   const s = achar('sc', id);
   if (!s) { el.innerHTML = vazio('🤔', 'Solicitação não encontrada'); cabecalho('Solicitação', ''); return; }
@@ -370,16 +521,22 @@ function telaSolicitacao(el, id) {
           '<div class="barra-acoes" style="justify-content:space-between;margin-bottom:8px">' +
             '<h3 style="margin:0">Itens pedidos</h3>' + etiqueta(s.situacao) + ' ' + etiquetaUrgencia(s.urgencia) +
           '</div>' +
-          '<table><thead><tr><th>#</th><th>Material</th><th class="num">Qtd</th></tr></thead><tbody>' +
-          (s.itens || []).map((i, n) => '<tr><td>' + (n + 1) + '</td><td>' + esc(i.descricao) +
-            (i.obs ? '<div style="font-size:.8rem;color:var(--texto-fraco)">' + esc(i.obs) + '</div>' : '') + '</td>' +
-            '<td class="num">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</td></tr>').join('') +
-          '</tbody></table>' +
+          // Quem compra PRECISA poder ajustar o que veio do pedido: o pessoal
+          // da produção pede "3 chapas", e na hora de comprar é 3 chapas de
+          // 1,22x2,44 ou a caixa fechada com 5. Antes o texto do solicitante
+          // era intocável e a correção ia parar num WhatsApp -- fora do
+          // sistema, onde ninguém mais lê.
+          //
+          // Toda alteração fica no histórico da solicitação, com quem mudou e
+          // o que era antes: ajustar não é apagar o que a pessoa pediu.
+          '<div id="itensSC">' + htmlItensSC(s) + '</div>' +
           (s.justificativa ? '<p style="margin-top:12px"><b>Observação:</b> ' + esc(s.justificativa) + '</p>' : '') +
           (s.motivoRecusa ? '<div class="aviso ruim" style="margin-top:12px"><b>Recusada:</b> ' + esc(s.motivoRecusa) + '</div>' : '') +
           '<div class="barra-acoes" style="margin-top:14px">' +
             // Quem é da empresa pede material, mas não decide a compra — nem na
             // tela nem no servidor.
+            (decide && !['atendida', 'recusada'].includes(s.situacao)
+              ? '<button class="btn" id="editarItens">✏️ Ajustar itens</button>' : '') +
             (decide && podeAprovar ? '<button class="btn verde" id="aprovar">✓ Aprovar</button>' +
               '<button class="btn perigo" id="recusar">✕ Recusar</button>' : '') +
             (decide && ['nova', 'aprovada', 'em_cotacao', 'em_compra'].includes(s.situacao)
@@ -471,6 +628,8 @@ function telaSolicitacao(el, id) {
       if (m) marcar('recusada', 'Recusada: ' + m, { motivoRecusa: m });
     });
   }
+  const bei = document.getElementById('editarItens');
+  if (bei) bei.addEventListener('click', () => editarItensSC(s));
   const bpc = document.getElementById('pedirCot');
   if (bpc) bpc.addEventListener('click', () => abrirNovaCotacao(s));
   const bcs = document.getElementById('cotarSug');
@@ -607,9 +766,32 @@ function editorOC(el, id, scId) {
     situacao: 'rascunho',
     itens: sc ? (sc.itens || []).map((i) => ({ id: i.id, descricao: i.descricao, unid: i.unid, qtd: i.qtd, preco: 0 })) : [],
     scIds: sc ? [sc.id] : [],
-    ipiPerc: 0, icmsPerc: 0, frete: 0, seguro: 0, desconto: 0
+    frete: 0, seguro: 0, desconto: 0, temDifal: false, difalValor: 0
   };
   if (!oc.itens.length) oc.itens = [{}, {}];
+  S.ocEditando = oc;
+
+  // Fornecedor já preenchido quando dá para saber quem é: a mesma conta que a
+  // tela da solicitação usa para sugerir (cadastro + histórico de quem já
+  // vendeu aquilo). Vem como sugestão editável -- o campo continua livre.
+  let sugerido = null;
+  if (!existente && !oc.fornecedorId) {
+    const cand = sugerirFornecedores((oc.itens || []).filter((i) => i && i.descricao), 1)[0];
+    if (cand && cand.forn) {
+      sugerido = cand;
+      const x = cand.forn;
+      oc.fornecedorId = x.id;
+      oc.fornecedor = {
+        nome: x.nome, cnpj: x.cnpj, ie: x.ie, endereco: x.endereco,
+        contato: x.contato, telefone: x.telefone, email: x.email,
+      };
+      if (!oc.dadosBancarios && x.banco) oc.dadosBancarios = x.banco;
+      if (!oc.condicaoPagamento && x.condicao) oc.condicaoPagamento = x.condicao;
+    }
+  }
+
+  // `f` só depois do preenchimento automático: capturado antes, o formulário
+  // saía com o select do cadastro marcado e os campos do fornecedor VAZIOS.
   const f = oc.fornecedor || {};
 
   cabecalho(existente ? 'Editar ' + (oc.codigo || 'ordem de compra') : 'Nova ordem de compra',
@@ -620,6 +802,10 @@ function editorOC(el, id, scId) {
     '<div id="fOC">' +
       '<div class="cartao">' +
         '<h3>🏢 Fornecedor</h3>' +
+        (sugerido
+          ? '<div class="aviso info" style="text-align:left">Já preenchi com <b>' + esc(sugerido.forn.nome) +
+            '</b> — ' + esc(sugerido.motivos.join(' · ').replace(/<[^>]+>/g, '')) + '. Troque se não for esse.</div>'
+          : '') +
         '<div class="linha">' +
           campo('Escolher cadastrado', '<select id="selForn"><option value="">— digitar abaixo —</option>' +
             fornecedoresAtivos().map((x) => '<option value="' + esc(x.id) + '"' + (oc.fornecedorId === x.id ? ' selected' : '') + '>' +
@@ -660,20 +846,27 @@ function editorOC(el, id, scId) {
             esc(oc.os.cliente || 'sem cliente') + '</strong>' +
             (oc.os.servico ? '<br>' + esc(oc.os.servico) : '') + '</div>'
           : '') + '</div>' +
+        // As duas condições que mudam em TODA compra ficam à vista. O resto
+        // (modalidade, validade da proposta, garantia, dados bancários) é
+        // preenchido uma vez e repetido — fica dobrado, a um clique. Antes eram
+        // quatro linhas de campos e a pessoa rolava a tela para achar o preço.
         '<div class="linha">' +
-          campo('Local de entrega', entrada('localEntrega', oc.localEntrega, { placeholder: 'Ex.: fábrica — Rua X, 100' })) +
-          campo('Prazo de entrega', entrada('prazoEntrega', oc.prazoEntrega, { placeholder: 'Ex.: 10 dias úteis' })) +
-          campo('Validade da proposta', entrada('validadeProposta', oc.validadeProposta, { placeholder: 'Ex.: 15 dias' })) +
-        '</div>' +
-        '<div class="linha">' +
-          campo('Modalidade', seletor('modalidade', oc.modalidade, ['CIF', 'FOB'])) +
           campo('Condição de pagamento', entrada('condicaoPagamento', oc.condicaoPagamento, { placeholder: 'Ex.: 28 dias' })) +
           campo('Forma de pagamento', seletor('formaPagamento', oc.formaPagamento, ['Boleto', 'PIX/TED', 'Cheque', 'Cartão', 'Outro'], '—')) +
+          campo('Prazo de entrega', entrada('prazoEntrega', oc.prazoEntrega, { placeholder: 'Ex.: 10 dias úteis' })) +
         '</div>' +
-        '<div class="linha">' +
-          campo('Dados bancários', entrada('dadosBancarios', oc.dadosBancarios)) +
-          campo('Garantia', entrada('garantia', oc.garantia, { placeholder: 'Ex.: 12 meses' })) +
-        '</div>' +
+        '<details class="mais-condicoes"' + (oc.localEntrega || oc.garantia || oc.dadosBancarios || oc.validadeProposta ? ' open' : '') + '>' +
+          '<summary>Mais condições (entrega, garantia, banco)</summary>' +
+          '<div class="linha">' +
+            campo('Local de entrega', entrada('localEntrega', oc.localEntrega, { placeholder: 'Ex.: fábrica — Rua X, 100' })) +
+            campo('Modalidade', seletor('modalidade', oc.modalidade, ['CIF', 'FOB'])) +
+            campo('Validade da proposta', entrada('validadeProposta', oc.validadeProposta, { placeholder: 'Ex.: 15 dias' })) +
+          '</div>' +
+          '<div class="linha">' +
+            campo('Dados bancários', entrada('dadosBancarios', oc.dadosBancarios)) +
+            campo('Garantia', entrada('garantia', oc.garantia, { placeholder: 'Ex.: 12 meses' })) +
+          '</div>' +
+        '</details>' +
       '</div>' +
 
       '<div class="cartao">' +
@@ -686,14 +879,32 @@ function editorOC(el, id, scId) {
       '</div>' +
 
       '<div class="cartao">' +
-        '<h3>💰 Impostos, frete e desconto</h3>' +
+        '<h3>💰 Valores</h3>' +
+        // Alíquota de IPI/ICMS saiu: ninguém aqui digita porcentagem de imposto,
+        // e o campo em branco só somava zero. O que a casa realmente encontra é
+        // o DIFAL da compra de fora do estado — e disso quem compra sabe SE tem;
+        // o valor vem escrito na nota.
         '<div class="linha estreita">' +
-          campo('IPI (%)', entrada('ipiPerc', oc.ipiPerc, { inputmode: 'decimal' })) +
-          campo('ICMS/ST (%)', entrada('icmsPerc', oc.icmsPerc, { inputmode: 'decimal' })) +
           campo('Frete (R$)', entrada('frete', oc.frete, { inputmode: 'decimal' })) +
           campo('Seguro (R$)', entrada('seguro', oc.seguro, { inputmode: 'decimal' })) +
           campo('Desconto (R$)', entrada('desconto', oc.desconto, { inputmode: 'decimal' })) +
         '</div>' +
+        '<label class="arquivo-solto" style="cursor:pointer;margin-top:4px">' +
+          '<input type="checkbox" id="ocDifal" data-campo="temDifal"' + (oc.temDifal ? ' checked' : '') +
+            ' style="width:18px;height:18px;flex:none">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div class="nome">Tem DIFAL</div>' +
+            '<div class="meta">Compra de fora do estado com diferencial de alíquota cobrado à parte.</div>' +
+          '</div>' +
+        '</label>' +
+        '<div id="caixaDifal" class="linha estreita"' + (oc.temDifal ? '' : ' hidden') + '>' +
+          campo('Valor do DIFAL (R$)', entrada('difalValor', oc.difalValor, { inputmode: 'decimal' }),
+            'O valor que veio na nota. Entra no total da ordem.') +
+        '</div>' +
+        (oc.ipiPerc || oc.icmsPerc
+          ? '<p class="legenda">Esta ordem foi criada com IPI ' + fmt.numero(oc.ipiPerc || 0) + '% e ICMS/ST ' +
+            fmt.numero(oc.icmsPerc || 0) + '%, que continuam somando no total.</p>'
+          : '') +
         '<div class="grade g2" style="margin-top:6px">' +
           '<div class="indicador"><div class="rotulo">Soma dos itens</div><div class="valor" id="vTotal">R$ 0,00</div></div>' +
           '<div class="indicador ok"><div class="rotulo">Valor líquido final</div><div class="valor" id="vLiquido">R$ 0,00</div></div>' +
@@ -709,8 +920,14 @@ function editorOC(el, id, scId) {
     ligar(caixa.lastElementChild);
     caixa.lastElementChild.querySelector('input').focus();
   });
-  el.querySelectorAll('[data-campo^="ipi"],[data-campo^="icms"],[data-campo=frete],[data-campo=seguro],[data-campo=desconto]')
+  el.querySelectorAll('[data-campo=frete],[data-campo=seguro],[data-campo=desconto],[data-campo=difalValor]')
     .forEach((i) => i.addEventListener('input', recalcularOC));
+  const chkDifal = document.getElementById('ocDifal');
+  if (chkDifal) chkDifal.addEventListener('change', () => {
+    const cx = document.getElementById('caixaDifal');
+    if (cx) cx.hidden = !chkDifal.checked;
+    recalcularOC();
+  });
   document.getElementById('selForn').addEventListener('change', (e) => {
     const x = achar('forn', e.target.value);
     if (!x) return;
@@ -770,7 +987,11 @@ function editorOC(el, id, scId) {
       obra: nomeObra(d.obraId),
       // Voltar para "— digitar abaixo —" desliga o vínculo com o cadastrado.
       fornecedorId: document.getElementById('selForn').value,
-      ipiPerc: numeroBR(d.ipiPerc), icmsPerc: numeroBR(d.icmsPerc),
+      // ipiPerc/icmsPerc NÃO são lidos do formulário (saíram da tela): ficam
+      // com o valor já gravado, senão editar uma ordem antiga zeraria imposto
+      // que está no total dela e o número mudaria sozinho.
+      temDifal: !!(document.getElementById('ocDifal') || {}).checked,
+      difalValor: numeroBR(d.difalValor),
       frete: numeroBR(d.frete), seguro: numeroBR(d.seguro), desconto: numeroBR(d.desconto)
     });
     // Vínculo com a O.S.: só vale o que foi CONFERIDO na busca. Número digitado
@@ -852,9 +1073,16 @@ function recalcularOC() {
   if (!caixa) return;
   const raiz = document.getElementById('fOC');
   const g = (n) => numeroBR((raiz.querySelector('[data-campo=' + n + ']') || {}).value || 0);
+  // As alíquotas antigas não estão mais na tela, mas continuam no registro --
+  // sem lê-las de S.ocEditando o total ao vivo ficaria MENOR que o salvo.
+  const anterior = S.ocEditando || {};
   const oc = {
     itens: lerItens(caixa, true),
-    ipiPerc: g('ipiPerc'), icmsPerc: g('icmsPerc'), frete: g('frete'), seguro: g('seguro'), desconto: g('desconto')
+    ipiPerc: Number(anterior.ipiPerc) || 0,
+    icmsPerc: Number(anterior.icmsPerc) || 0,
+    temDifal: !!(document.getElementById('ocDifal') || {}).checked,
+    difalValor: g('difalValor'),
+    frete: g('frete'), seguro: g('seguro'), desconto: g('desconto')
   };
   const t = totaisOC(oc);
   const a = document.getElementById('vTotal');
@@ -944,6 +1172,7 @@ function telaOC(el, id) {
             '<tr><td colspan="4">Soma dos itens</td><td class="num">' + fmt.brl(t.total) + '</td></tr>' +
             (o.ipiPerc ? '<tr><td colspan="4">IPI ' + fmt.numero(o.ipiPerc) + '%</td><td class="num">' + fmt.brl(t.ipi) + '</td></tr>' : '') +
             (o.icmsPerc ? '<tr><td colspan="4">ICMS/ST ' + fmt.numero(o.icmsPerc) + '%</td><td class="num">' + fmt.brl(t.icms) + '</td></tr>' : '') +
+            (t.difal ? '<tr><td colspan="4">DIFAL</td><td class="num">' + fmt.brl(t.difal) + '</td></tr>' : '') +
             (o.frete ? '<tr><td colspan="4">Frete</td><td class="num">' + fmt.brl(o.frete) + '</td></tr>' : '') +
             (o.seguro ? '<tr><td colspan="4">Seguro</td><td class="num">' + fmt.brl(o.seguro) + '</td></tr>' : '') +
             (o.desconto ? '<tr><td colspan="4">Desconto</td><td class="num">-' + fmt.brl(Math.abs(o.desconto)) + '</td></tr>' : '') +
@@ -1938,7 +2167,14 @@ TELAS.fornecedores = function (el, args) {
   cabecalho('Fornecedores',
     fs.length + ' fornecedor(es) · ' + eq.length + ' pessoa(s) que pede(m) material',
     _abaForn === 'mat'
-      ? (podeVer('config') ? '<button class="btn" id="trazerMubi">⬇️ Trazer do Mubisys</button>' : '') +
+      ? (podeVer('config')
+          ? '<button class="btn" id="trazerMubi">⬇️ Trazer fornecedores do Mubisys</button>' +
+            '<button class="btn" id="trazerProdutos" title="' +
+              (catalogoProdutos().produtos.length
+                ? catalogoProdutos().produtos.length + ' produto(s) guardados neste aparelho'
+                : 'Ainda não trouxe o catálogo') +
+            '">📦 Trazer catálogo de produtos</button>'
+          : '') +
         '<button class="btn primario" id="novoForn">+ Novo fornecedor</button>'
       : '<button class="btn primario" id="novaPessoa">+ Nova pessoa</button>');
 
@@ -1963,6 +2199,8 @@ TELAS.fornecedores = function (el, args) {
   document.getElementById('novoForn').addEventListener('click', () => editarFornecedor(null));
   const bm = document.getElementById('trazerMubi');
   if (bm) bm.addEventListener('click', trazerFornecedoresDoMubi);
+  const bp = document.getElementById('trazerProdutos');
+  if (bp) bp.addEventListener('click', trazerProdutosDoMubi);
   el.querySelectorAll('tr[data-ficha]').forEach((tr) => tr.addEventListener('click', (e) => {
     if (e.target.closest('button')) return;   // Zap e Editar continuam valendo
     irPara('fornecedores/' + tr.dataset.ficha);

@@ -81,6 +81,73 @@ function diasAte(dataISO) {
   return Math.round((d - new Date(new Date().toDateString())) / 86400000);
 }
 
+/* ── Período (ano/mês) ──────────────────────────────────────────────────────
+   O painel e as listas mostravam sempre "o mês corrente", sem dizer qual nem
+   deixar olhar outro. No dia 1º isso é cruel: o mês zera e parece que a
+   empresa parou de comprar. E na hora de fechar o mês ninguém consegue rever
+   o mês passado sem abrir o banco.
+
+   Um período só, guardado em S.periodo, serve painel, solicitações e ordens —
+   assim as três telas nunca discordam sobre "quando". mes = 0 é o ano inteiro. */
+const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+               'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+
+function periodoAtual() {
+  if (!S.periodo) {
+    const h = new Date();
+    S.periodo = { ano: h.getFullYear(), mes: h.getMonth() + 1 };
+  }
+  return S.periodo;
+}
+
+// Anos que existem nos dados, mais o ano corrente -- nunca uma lista fixa que
+// envelhece sozinha.
+function anosComDados() {
+  const anos = new Set([new Date().getFullYear()]);
+  for (const c of ['sc', 'oc', 'cot']) {
+    for (const r of lista(c)) {
+      const d = String(r.dataEmissao || r.criadoEm || '').slice(0, 4);
+      if (/^\d{4}$/.test(d)) anos.add(Number(d));
+    }
+  }
+  return [...anos].sort((a, b) => b - a);
+}
+
+// A data que representa o registro: emissão quando existe (a ordem vale pela
+// data que foi emitida, não pela que foi digitada no sistema).
+const dataDoRegistro = (r) => String(r.dataEmissao || r.criadoEm || '').slice(0, 10);
+
+function noPeriodo(r, per = periodoAtual()) {
+  const d = dataDoRegistro(r);
+  if (!d) return false;
+  if (Number(d.slice(0, 4)) !== Number(per.ano)) return false;
+  return !per.mes || Number(d.slice(5, 7)) === Number(per.mes);
+}
+
+const rotuloPeriodo = (per = periodoAtual()) =>
+  (per.mes ? MESES[per.mes - 1] + ' de ' : '') + per.ano;
+
+// Devolve o HTML dos dois seletores. `aoTrocar` é o nome de uma função global
+// chamada quando muda -- render() basta na maioria das telas.
+function seletorPeriodo() {
+  const per = periodoAtual();
+  return '<div class="periodo">' +
+    '<select id="perMes" aria-label="Mês">' +
+      '<option value="0"' + (per.mes ? '' : ' selected') + '>Ano inteiro</option>' +
+      MESES.map((m, i) => '<option value="' + (i + 1) + '"' + (per.mes === i + 1 ? ' selected' : '') + '>' + m + '</option>').join('') +
+    '</select>' +
+    '<select id="perAno" aria-label="Ano">' +
+      anosComDados().map((a) => '<option value="' + a + '"' + (per.ano === a ? ' selected' : '') + '>' + a + '</option>').join('') +
+    '</select></div>';
+}
+
+function ligarSeletorPeriodo() {
+  const m = document.getElementById('perMes');
+  const a = document.getElementById('perAno');
+  if (m) m.addEventListener('change', (e) => { periodoAtual().mes = Number(e.target.value) || 0; render(); });
+  if (a) a.addEventListener('change', (e) => { periodoAtual().ano = Number(e.target.value); render(); });
+}
+
 /* ── Etiquetas de situação ─────────────────────────────────────────────────── */
 const SITUACOES = {
   // solicitação

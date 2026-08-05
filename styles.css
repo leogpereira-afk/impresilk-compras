@@ -385,3 +385,43 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 @media (min-width: 901px) {
   .so-celular { display: none; }
 }
+
+/* ── Período (ano/mês) no cabeçalho ─────────────────────────────────────────
+   Fica junto dos botões de ação, e no celular ocupa a linha inteira: dois
+   seletores espremidos ao lado de dois botões viram alvos que ninguém acerta. */
+.periodo { display: inline-flex; gap: 6px; }
+.periodo select {
+  height: 38px; padding: 0 10px; border: 1px solid var(--borda);
+  border-radius: var(--raio); background: var(--papel); color: var(--texto);
+  font-size: .9rem; font-family: inherit;
+}
+@media (max-width: 640px) {
+  .periodo { width: 100%; }
+  .periodo select { flex: 1; min-width: 0; }
+}
+
+/* ── Faixa de situações ─────────────────────────────────────────────────────
+   Cada situação com a contagem e o valor. É botão, não enfeite: leva para a
+   lista já filtrada, então o número do painel e a lista são a mesma coisa. */
+.faixa-status { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-status {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border: 1px solid var(--borda); border-radius: 999px;
+  background: var(--papel); cursor: pointer; font-family: inherit;
+  transition: border-color .15s, background .15s;
+}
+.chip-status:hover { border-color: var(--azul); background: var(--azul-claro); }
+.chip-status.ativo { border-color: var(--azul); background: var(--azul-claro); }
+.chip-status b { font-size: 1rem; }
+.chip-status span:last-child { font-size: .82rem; color: var(--texto-fraco); }
+
+/* ── Condições dobradas na ordem de compra ──────────────────────────────────
+   Modalidade, garantia e banco são preenchidos uma vez e repetidos; ficavam
+   ocupando duas linhas acima do que interessa, que é o preço. */
+.mais-condicoes > summary {
+  cursor: pointer; padding: 8px 0; font-size: .88rem; color: var(--azul);
+  font-weight: 600; list-style: none;
+}
+.mais-condicoes > summary::-webkit-details-marker { display: none; }
+.mais-condicoes > summary::before { content: "▸ "; }
+.mais-condicoes[open] > summary::before { content: "▾ "; }
