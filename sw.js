@@ -21,12 +21,14 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  // Nunca guardar chamada de servidor em cache: dado tem que ser o do momento.
-  // O backend agora é o Supabase (outro domínio) — a regra antiga, que olhava
-  // o caminho /.netlify/functions/, virava letra morta e o app passaria a
-  // servir resposta velha de sincronização.
+  // Nunca cachear a API: o dado tem que ser o do momento (offline é a fila do
+  // store.js que resolve). O backend é o Supabase.
+  //
+  // A regra do Netlify saiu em 04/08/2026: os sites do Netlify foram apagados
+  // e este app passou a morar no GitHub Pages, então o caminho
+  // /.netlify/functions/ não existe mais em lugar nenhum. Linha morta em
+  // arquivo de cache confunde: dá a impressão de que ainda há um backend lá.
   if (url.hostname.endsWith('supabase.co')) return;
-  if (url.pathname.includes('/.netlify/functions/')) return;
   if (e.request.method !== 'GET') return;
 
   e.respondWith(
