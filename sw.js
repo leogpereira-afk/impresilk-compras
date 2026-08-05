@@ -1,7 +1,7 @@
 /* Service worker — deixa o app abrir sem internet (a obra costuma ter sinal ruim).
    Regra do kit: SUBIR o número do CACHE a cada publicação, senão o navegador
    continua servindo o arquivo velho. */
-const CACHE = 'compras-shell-v13';
+const CACHE = 'compras-shell-v14';
 const ARQUIVOS = [
   './', './index.html', './styles.css', './config.js', './store.js', './ui.js',
   './pdf.js', './qualificacao.js', './compras.js', './acervo.js', './cotacao.js', './app.js',
@@ -9,8 +9,11 @@ const ARQUIVOS = [
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'
 ];
 
+// cache:'reload' na instalação: sem isto o SW guarda o que estava no cache
+// HTTP do navegador (o Pages manda max-age=600) e passa a servir a versão
+// velha até o próximo bump — a equipe não recebe a correção recém-publicada.
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ARQUIVOS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ARQUIVOS.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
