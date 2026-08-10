@@ -514,9 +514,12 @@ Deno.serve(async (req) => {
           codigo: String(p.codigo ?? p.referencia ?? "").trim(),
           categoria: String(p.categoria ?? "").trim(),
           unidade: String(p.unidade ?? p.unidade_medida ?? "").trim(),
-          // Preço de VENDA do catálogo. Serve de referência para quem compra
-          // ("isso costuma sair por quanto?"), nunca como preço de compra.
-          valorVenda: Number(p.valor ?? p.valor_venda ?? 0) || 0,
+          // SEM preço de propósito. O catálogo serve para padronizar o NOME do
+          // material na hora de pedir -- e `podeFazer` libera ação desconhecida
+          // por padrão, então esta resposta chega também ao perfil "obra", de
+          // quem esta casa esconde valor (ver semValores/CAMPOS_VALOR). Além
+          // disso o que o ERP guarda é preço de VENDA: num pedido de compra ele
+          // não é referência, é ruído.
         })).filter((p: any) => p.nome);
 
         return json({
