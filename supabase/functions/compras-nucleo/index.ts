@@ -860,8 +860,17 @@ Deno.serve(async (req) => {
         return json({ ok: true, registros: linhas, nextAfter: linhas.length === PASSO ? de + PASSO : null });
       }
 
-      case "getCfg":
-        return json({ ok: true, cfg: cfgSemSegredo(cfg) });
+      case "getCfg": {
+        /* O ELENCO SO PARA QUEM ADMINISTRA.
+           cfgSemSegredo tira o hash, mas deixa a LISTA de contas: nome, login,
+           papel e ativo de todo mundo. Qualquer pessoa logada (ou o backup)
+           levava daqui o mapa de quem entra e com que poder -- exatamente o que
+           a mascara de leitura das telas esconde. Quem administra ja tem a
+           lista pela tela de acessos; para o resto ela nao serve para nada. */
+        const limpa = cfgSemSegredo(cfg) as Record<string, unknown>;
+        if (!ehBackup && perfilDe(quem) !== "direcao") delete limpa.usuarios;
+        return json({ ok: true, cfg: limpa });
+      }
 
       case "backup": {
         const registros = await lerTudo(null, NOMES_COLECOES);
