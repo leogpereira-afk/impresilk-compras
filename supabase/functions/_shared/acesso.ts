@@ -22,8 +22,17 @@ export interface Quem {
   proprio: boolean;
 }
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+
 const JWT_SECRET = Deno.env.get("EQUIPE_JWT_SECRET") ?? "";
 const SISTEMA = "compras";
+
+// Cliente de servico so para a pergunta da revogacao (uma consulta por pessoa
+// por minuto). Este arquivo continua sem tocar em dado do Compras.
+const sb = createClient(
+  Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  { auth: { persistSession: false } },
+);
 
 const PAPEL_PARA_PERFIL: Record<string, Quem["perfil"]> = {
   admin: "direcao",
@@ -64,6 +73,27 @@ async function chaveHmac(segredo: string) {
     { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 }
 
+const CACHE_REVOG = new Map<string, { ate: number; revogado: boolean }>();
+async function crachaRevogado(sub: string, papel: string): Promise<boolean> {
+  if (!sub) return false;
+  const chave = `${papel}:${sub}`;
+  const agora = Date.now();
+  const emCache = CACHE_REVOG.get(chave);
+  if (emCache && emCache.ate > agora) return emCache.revogado;
+  try {
+    const { data, error } = await sb.rpc("acesso_revogado", {
+      p_sistema: SISTEMA, p_sub: sub, p_papel: papel,
+    });
+    if (error) throw new Error(error.message);
+    const revogado = data === true;
+    CACHE_REVOG.set(chave, { ate: agora + 60_000, revogado });
+    return revogado;
+  } catch (e) {
+    console.error("[revogacao] indisponivel:", (e as Error)?.message);
+    return false;
+  }
+}
+
 export async function identificarPorCracha(req: Request): Promise<Quem | null> {
   if (!JWT_SECRET) return null; // sem segredo configurado, ninguém entra — fail closed
   const m = (req.headers.get("authorization") || "").match(/^Bearer\s+(.+)$/i);
@@ -78,6 +108,13 @@ export async function identificarPorCracha(req: Request): Promise<Quem | null> {
     if (!corpo.exp || corpo.exp < Math.floor(Date.now() / 1000)) return null;
     if (corpo.sis !== SISTEMA) return null; // crachá do Brief não abre o Compras
     const perfil = PAPEL_PARA_PERFIL[String(corpo.papel)] ?? "obra";
+    /* "Esse cracha ainda vale?" -- a pergunta que esta porta nao fazia. O cracha
+       dura 30 dias no aparelho; desativar alguem na tela de Acessos so tinha
+       efeito quando ele vencia. A regra mora no BANCO (public.acesso_revogado),
+       a mesma que as portas dos outros sete consultam: as functions estao em
+       cinco repositorios e um arquivo compartilhado viraria doze copias
+       envelhecendo caladas. Cache de 60s; banco fora do ar ACEITA. */
+    if (await crachaRevogado(String(corpo.sub), String(corpo.papel ?? ""))) return null;
     return { id: String(corpo.sub), nome: String(corpo.nome || corpo.sub), cargo: "", perfil, proprio: true };
   } catch { return null; }
 }
