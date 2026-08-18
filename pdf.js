@@ -27,6 +27,36 @@ const M = 10;            // margem em mm
 const L = 210;           // largura A4
 const UTIL = L - 2 * M;  // 190mm
 
+/* A BIBLIOTECA DE PDF CHEGA SO QUANDO ALGUEM VAI GERAR UM PDF.
+ *
+ * O jsPDF tem 114 kB comprimidos e estava no <script> do index.html: TODO
+ * mundo baixava, em toda visita, para abrir a tela de pedidos. Medido na rede,
+ * era 52% de tudo o que a primeira tela pedia (114 de 218 kB) -- mais da
+ * metade do carregamento para uma coisa que so acontece quando se clica em
+ * "gerar PDF".
+ *
+ * Uma promessa so: chamadas simultaneas esperam o mesmo carregamento, e a
+ * segunda vez em diante e instantanea (ja esta na memoria e no cache).
+ */
+let _jsPdfPronto = null;
+function garantirJsPDF() {
+  if (window.jspdf) return Promise.resolve();
+  if (_jsPdfPronto) return _jsPdfPronto;
+  _jsPdfPronto = new Promise((ok, falhou) => {
+    const s = document.createElement('script');
+    s.src = 'libs/jspdf.umd.min.js';
+    s.onload = () => ok();
+    s.onerror = () => {
+      // Zera para a proxima tentativa poder tentar de novo: sem isto, uma
+      // falha de rede momentanea deixaria o PDF quebrado ate recarregar a pagina.
+      _jsPdfPronto = null;
+      falhou(new Error('Nao consegui carregar o gerador de PDF. Verifique a conexao e tente de novo.'));
+    };
+    document.head.appendChild(s);
+  });
+  return _jsPdfPronto;
+}
+
 function novoDoc() {
   const { jsPDF } = window.jspdf;
   return new jsPDF({ unit: 'mm', format: 'a4', compress: true });
@@ -188,7 +218,8 @@ function rodapePDF(doc, texto) {
 
 /* ── Ordem de Compra ───────────────────────────────────────────────────────── */
 async function pdfOC(o, cfg) {
-  const logo = await carregarLogo();
+  // Em paralelo: a logo e a biblioteca chegam juntas, sem somar as esperas.
+  const [logo] = await Promise.all([carregarLogo(), garantirJsPDF()]);
   const doc = novoDoc();
   const f = o.fornecedor || {};
   const t = totaisOC(o);
