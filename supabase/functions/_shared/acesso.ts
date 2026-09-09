@@ -49,14 +49,14 @@ export const PERFIS: Record<string, {
     txt: "Solicitante",
     tudo: false,
     escreve: ["sc", "oc"],
-    le: ["sc", "oc", "forn", "equipe", "doc", "proj", "trein"],
+    le: ["sc", "oc", "forn", "equipe", "doc", "proj", "trein", "mat", "transp"],
     semPreco: ["oc", "cot"],
   },
 };
 
 // Gestão de contas saiu daqui: quem cria/troca senha é a equipe-auth (Central).
 export const ACOES_DIRECAO = ["salvarCfg", "esvaziarLixeira", "reiniciarNumeracao",
-  "restaurar", "restaurarItem", "log", "backup", "diagMubi", "fornecedoresMubi"];
+  "restaurar", "restaurarItem", "log", "backup", "diagMubi", "fornecedoresMubi", "conferenciaMubi"];
 
 export const ACOES_NEGADAS_OBRA = ["apagar"];
 
@@ -191,6 +191,7 @@ function repor(guardado: any, veio: any): any {
 // Devolve '' quando pode, ou o motivo da recusa.
 export function motivoRecusa(quem: Quem | null, colecao: string, registro: any, atual: any): string {
   const perfil = perfilDe(quem);
+  if (perfil !== "direcao" && !igual(registro.referenciasErp, atual?.referenciasErp)) return "somente a direção altera referências do ERP";
   if (perfil !== "obra") return "";
 
   const escreve = PERFIS.obra.escreve!;

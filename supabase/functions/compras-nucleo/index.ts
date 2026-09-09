@@ -1,3 +1,4 @@
+import { validarRede, ErroRede } from "../_shared/rede.ts";
 // ============================================================================
 // compras-nucleo — backend do COMPRAS da Impresilk.
 //
@@ -34,6 +35,8 @@ import {
   definirNumeracao, registrarLog, lerLog, gravarBackup, apagarArquivo,
   marcarMudanca,
 } from "../_shared/dados.ts";
+
+import { consultarMubi, parametrosConferencia, normalizarConferencia } from "../_shared/mubisys.ts";
 
 const NOMES_COLECOES = Object.keys(COLECOES);
 
@@ -91,7 +94,7 @@ async function lerCfg(): Promise<any> {
 // 'fornecedores' é a lista de convidados da cotação: dois compradores mexendo na
 // mesma cotação em celulares diferentes não podem apagar a resposta um do outro.
 const CAMPOS_UNIAO = ["historico", "recebimentos", "cotacoes", "anexos", "versoes",
-  "documentos", "avaliacoes", "fornecedores"];
+  "documentos", "avaliacoes", "fornecedores", "referenciasErp"];
 
 // Listas de TEXTO (ids soltos), que o unirPorId não sabe juntar: ele casa por
 // `it.id`, e string não tem id — todas cairiam na mesma chave e virariam uma.
@@ -168,6 +171,8 @@ async function gravar(col: string, registro: any, por: string): Promise<any> {
         .filter((x: unknown) => typeof x === "string" && x);
     }
   }
+
+  await validarRede(col, novo, antigo, lerUm);
 
   // A situação de uma ordem de compra é DECIDIDA AQUI, depois de juntar os
   // recebimentos dos dois aparelhos. Cada celular só enxerga os recebimentos
@@ -357,6 +362,19 @@ Deno.serve(async (req) => {
       case "ping":
         return json({ ok: true, runtime: "supabase" });
 
+      case "conferenciaMubi": {
+        // Confirma o papel explicitamente, inclusive para credenciais de backup.
+        if (!quem || perfilDe(quem) !== "direcao") return json({ error: "Conferência financeira disponível apenas para a direção." }, 403);
+        const revogacao = await db.rpc("acesso_revogado", { p_sistema: "compras", p_sub: quem.id, p_papel: "admin" });
+        if (revogacao.error) return json({ error: "Não foi possível confirmar o acesso financeiro. Tente novamente." }, 503);
+        if (revogacao.data !== false) return json({ error: "Acesso financeiro indisponível para esta sessão." }, 403);
+        try {
+          const { recurso, params } = parametrosConferencia(body);
+          const r = await consultarMubi(recurso, params);
+          return json({ ok: true, ...r, dados: r.dados.map((x: any) => normalizarConferencia(x, body.tipo)), origem: "Mubisys", tipo: body.tipo, inicio: body.inicio, fim: body.fim });
+        } catch (e) { return json({ error: (e as Error).message }, 502); }
+      }
+
       /* ── Fornecedores do Mubisys ────────────────────────────────────────────
          Sonda quais endereços da API existem. O kit de conexão só documenta
          ordem-servico e contas-pagar; em vez de chutar o caminho e receber 404
@@ -416,17 +434,9 @@ Deno.serve(async (req) => {
 
         const pagina = Math.max(1, Number(body.pagina ?? 1) || 1);
         const caminho = body.caminho === "cliente" ? "cliente" : "fornecedor";
-        const r = await fetch(`${BASE}/${KEY}/${caminho}?page=${pagina}&per_page=500`,
-          { headers: { Accept: "application/json", "Access-Token": TK } });
-        // O Mubisys responde 201 no sucesso; 200 também é aceito por segurança.
-        if (r.status !== 201 && r.status !== 200) {
-          const corpo = await r.text().catch(() => "");
-          return json({ ok: false, error: `Mubisys respondeu ${r.status}: ${corpo.slice(0, 160)}` }, 502);
-        }
-        const j = await r.json();
-        const lista = Array.isArray(j) ? j : (j.data ?? []);
-        const pag = j.pagination ?? {};
-
+        const consulta = await consultarMubi(caminho, { page: String(pagina), per_page: "500" });
+        const lista = consulta.dados;
+        const pag = { current_page: consulta.pagina, last_page: consulta.paginas, total: consulta.total };
         const soDig = (v: unknown) => String(v ?? "").replace(/\D/g, "");
         // O ERP guarda telefone como +5538988152550; o app trabalha com o
         // número nacional, e é assim que o WhatsApp é montado no resto do sistema.
@@ -473,9 +483,9 @@ Deno.serve(async (req) => {
         return json({
           ok: true,
           pagina: Number(pag.current_page ?? pagina),
-          paginas: Number(pag.last_page ?? 1),
+          paginas: pag.last_page,
           total: Number(pag.total ?? fornecedores.length),
-          temMais: Number(pag.current_page ?? pagina) < Number(pag.last_page ?? 1),
+          temMais: consulta.temMais,
           fornecedores,
         });
       }
@@ -497,20 +507,13 @@ Deno.serve(async (req) => {
         if (!KEY || !TK) return json({ ok: false, error: "Credenciais do Mubisys não configuradas neste projeto." }, 503);
 
         const pagina = Math.max(1, Number(body.pagina ?? 1) || 1);
-        const r = await fetch(`${BASE}/${KEY}/produto?page=${pagina}&per_page=500`,
-          { headers: { Accept: "application/json", "Access-Token": TK } });
-        // O Mubisys responde 201 no sucesso; 200 também é aceito por segurança.
-        if (r.status !== 201 && r.status !== 200) {
-          const corpo = await r.text().catch(() => "");
-          return json({ ok: false, error: `Mubisys respondeu ${r.status}: ${corpo.slice(0, 160)}` }, 502);
-        }
-        const j = await r.json();
-        const lista = Array.isArray(j) ? j : (j.data ?? []);
-        const pag = j.pagination ?? {};
-
+        const consulta = await consultarMubi(body.catalogo === "materias" ? "materia-prima" : "produto", { page: String(pagina), per_page: "500" });
+        const lista = consulta.dados;
+        const pag = { current_page: consulta.pagina, last_page: consulta.paginas, total: consulta.total };
         const produtos = lista.map((p: any) => ({
           idMubi: String(p.id ?? ""),
           nome: String(p.nome ?? p.descricao ?? "").trim(),
+          tipo: body.catalogo === "materias" ? "materia-prima" : "produto",
           codigo: String(p.codigo ?? p.referencia ?? "").trim(),
           categoria: String(p.categoria ?? "").trim(),
           unidade: String(p.unidade ?? p.unidade_medida ?? "").trim(),
@@ -525,9 +528,9 @@ Deno.serve(async (req) => {
         return json({
           ok: true,
           pagina: Number(pag.current_page ?? pagina),
-          paginas: Number(pag.last_page ?? 1),
+          paginas: pag.last_page,
           total: Number(pag.total ?? produtos.length),
-          temMais: Number(pag.current_page ?? pagina) < Number(pag.last_page ?? 1),
+          temMais: consulta.temMais,
           produtos,
         });
       }
@@ -541,15 +544,18 @@ Deno.serve(async (req) => {
       case "buscarOS": {
         const numero = String(body.numero ?? "").replace(/\D/g, "");
         if (!numero) return json({ error: "Informe o número da O.S." }, 400);
-        const { data } = await db.from("pcp_registros").select("registro")
+        const { data, error } = await db.from("pcp_registros").select("registro, atualizado_em")
           .eq("colecao", "os").eq("apagado", false)
           .eq("registro->>numero", numero).limit(1).maybeSingle();
+        if (error) return json({ error: "Não foi possível consultar a base do PCP." }, 503);
         if (!data) return json({ ok: true, os: null });
         const r: any = data.registro || {};
         return json({
           ok: true,
           os: {
             numero: String(r.numero ?? numero),
+            origemConsulta: "PCP · referência do Mubisys",
+            atualizadoPCPEm: data.atualizado_em || null,
             cliente: String(r.cliente ?? ""),
             contato: String(r.contato ?? ""),
             whatsapp: String(r.whatsapp ?? ""),
@@ -607,7 +613,8 @@ Deno.serve(async (req) => {
           const reg = reporEscondidos(quem, it.colecao, it.registro, atual);
           const motivo = motivoRecusa(quem, it.colecao, reg, atual);
           if (motivo) { recusados.push({ colecao: it.colecao, id: it.registro.id, motivo }); continue; }
-          salvos.push(await gravar(it.colecao, reg, por));
+          try { salvos.push(await gravar(it.colecao, reg, por)); }
+          catch (e) { if (e instanceof ErroRede) recusados.push({ colecao: it.colecao, id: it.registro.id, motivo: e.message }); else throw e; }
         }
         if (recusados.length) {
           await registrarLog({
@@ -770,7 +777,7 @@ Deno.serve(async (req) => {
           cotacao: {
             codigo: c.codigo, obra: c.obra, prazoResposta: c.prazoResposta,
             observacoes: c.observacoes, encerrada: c.situacao !== "aberta",
-            itens: (c.itens || []).map((i: any) => ({ id: i.id, descricao: i.descricao, unid: i.unid, qtd: i.qtd })),
+            itens: (c.itens || []).map((i: any) => ({ id: i.id, descricao: i.descricao, unid: i.unid, qtd: i.qtd, nomeFornecedor: (f.itensFornecedor?.[i.id] || {}).nome || "", codigoFornecedor: (f.itensFornecedor?.[i.id] || {}).codigo || "" })),
           },
           minhaResposta: {
             nome: f.nome, contato: f.contato, precos: f.precos || {}, frete: f.frete,

@@ -1,3 +1,13 @@
+// Só a data de recebimento representa entrega; edição posterior não mede atraso.
+function atrasoEntregaReal(o) {
+  if (!o.recebidoEm || !o.entregaPrevista) return null;
+  const d = new Date(o.recebidoEm);
+  if (!Number.isFinite(d.getTime())) return null;
+  const recebido = String(o.recebidoEm).length === 10 ? o.recebidoEm :
+    [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-');
+  const a = diasAte(recebido), b = diasAte(o.entregaPrevista);
+  return a == null || b == null ? null : a-b;
+}
 /* Qualificação de fornecedor.
 
    A nota tem DUAS metades, e isso é de propósito:
@@ -36,7 +46,7 @@ function selo(nota, opts = {}) {
   const c = classeDe(nota);
   if (!c) return '<span class="etiqueta">sem histórico</span>';
   if (opts.provisorio) {
-    return '<span class="etiqueta" title="Ainda não entregou nada: esta nota vem só da resposta a cotação.">' +
+    return '<span class="etiqueta" title="Amostra pequena: menos de 3 entregas com prazo verificável.">' +
       'provisório · ' + fmt.numero(nota, 1) + '</span>';
   }
   return '<span class="etiqueta ' + c.cls + '" title="' + esc(c.dica) + '">' +
@@ -102,11 +112,7 @@ function desempenhoFornecedor(f) {
   const canceladas = compras.filter((o) => o.situacao === 'cancelada');
 
   // Pontualidade: data da última entrega contra a data prometida.
-  const comPrazo = entregues.filter((o) => o.entregaPrevista && (o.recebidoEm || o.atualizadoEm));
-  const atrasos = comPrazo.map((o) => {
-    const chegou = String(o.recebidoEm || o.atualizadoEm).slice(0, 10);
-    return Math.round((new Date(chegou) - new Date(o.entregaPrevista)) / 86400000);
-  });
+  const atrasos = entregues.map(atrasoEntregaReal).filter(d => d != null);
   const noPrazo = atrasos.filter((d) => d <= 0).length;
   const pontualidade = atrasos.length ? noPrazo / atrasos.length : null;
   const atrasoMedio = atrasos.length ? atrasos.reduce((s, d) => s + Math.max(0, d), 0) / atrasos.length : null;
@@ -151,7 +157,7 @@ function notaFornecedor(f) {
   const estrelas = mediaAvaliacoes(f);
   const quantasAvaliacoes = ((f.avaliacoes) || []).filter((a) => a && a.media && !a.apagadoEm).length;
   // Sem entrega nenhuma e sem avaliação, a nota não passa de um palpite.
-  const provisorio = d.entregues === 0 && quantasAvaliacoes === 0;
+  const provisorio = d.entregues < 3 || d.medidas < 3;
   return { nota: combinar(d.nota, estrelas), desempenho: d, estrelas, quantasAvaliacoes, provisorio };
 }
 
@@ -226,7 +232,7 @@ function cartaoQualificacao(q) {
         '<div class="legenda">' + (semNada
           ? 'Ainda sem histórico para pontuar.'
           : q.provisorio
-            ? 'Nota provisória: ainda não entregou nenhuma compra. Ela vira definitiva na primeira entrega.'
+            ? 'Amostra pequena: menos de 3 entregas com prazo verificável. Use a nota com o histórico.'
             : esc(c.txt) + ' — ' + esc(c.dica)) + '</div></div>' +
       '<div style="text-align:right">' +
         (semNada ? '<span class="etiqueta">sem histórico</span>'
@@ -241,7 +247,7 @@ function cartaoQualificacao(q) {
       linhaFicha('🚚', 'Entrega no prazo', pct(d.pontualidade),
             d.medidas ? d.noPrazo + ' de ' + d.medidas + ' entrega(s) no prazo' +
               (d.atrasoMedio ? ' · atraso médio de ' + fmt.numero(d.atrasoMedio, 1) + ' dia(s)' : '')
-              : 'nenhuma entrega com data prometida ainda',
+              : 'nenhuma entrega com data prometida e recebimento verificáveis',
         d.pontualidade != null && d.pontualidade < 0.7) +
       linhaFicha('📦', 'Entregou tudo', pct(d.completude),
             d.entregues ? d.entregues + ' compra(s) entregue(s)' +
@@ -298,7 +304,7 @@ function fichaFornecedor(el, id) {
     '<button class="btn" id="fNossosDados">📤 Nossos dados</button>' +
     '<button class="btn primario" id="fEditar">Editar cadastro</button>');
 
-  el.innerHTML =
+  el.innerHTML = htmlPortfolioFornecedor(f) +
     '<div class="grade g2"><div>' +
       cartaoQualificacao(q) +
       '<div class="cartao"><h3>🧾 Compras</h3>' +
@@ -306,9 +312,7 @@ function fichaFornecedor(el, id) {
           ? '<div class="tabela-rolagem"><table><thead><tr><th>Nº</th><th>Data</th>' +
             '<th class="num">Valor</th><th>Situação</th><th>Prazo</th></tr></thead><tbody>' +
             compras.slice(0, 20).map((o) => {
-              const chegou = o.recebidoEm ? String(o.recebidoEm).slice(0, 10) : null;
-              const atraso = (chegou && o.entregaPrevista)
-                ? Math.round((new Date(chegou) - new Date(o.entregaPrevista)) / 86400000) : null;
+              const atraso = atrasoEntregaReal(o);
               return '<tr class="clicavel" data-oc="' + esc(o.id) + '">' +
                 '<td><b>' + esc(o.codigo || '—') + '</b></td>' +
                 '<td>' + fmt.data(o.dataEmissao || o.criadoEm) + '</td>' +
@@ -345,6 +349,7 @@ function fichaFornecedor(el, id) {
         : '') +
     '</div></div>';
 
+  ligarPortfolioFornecedor(el, f);
   el.querySelectorAll('[data-oc]').forEach((tr) => tr.addEventListener('click', () => irPara('compras/' + tr.dataset.oc)));
   document.getElementById('fEditar').addEventListener('click', () => editarFornecedor(f.id));
   // Fornecedor novo pede os dados da Impresilk antes de faturar: sai daqui

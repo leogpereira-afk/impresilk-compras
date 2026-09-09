@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Sintaxe de todos os .js
         run: |
           set -e
@@ -31,3 +31,15 @@ jobs:
       # em silêncio: foi assim que a busca de O.S. nunca funcionou.
       - name: Nenhum seletor apontando para nada
         run: node scripts/conferir-seletores.mjs
+
+      - name: Regressões de prazos e painel
+        run: node tests/prazos.mjs
+
+      - name: Integração e inteligência
+        run: node tests/integracao.mjs
+
+      - name: Rede de suprimentos
+        run: node tests/rede.mjs
+
+      - name: Sintaxe do servidor
+        run: node tests/sintaxe-servidor.mjs

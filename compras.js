@@ -67,7 +67,7 @@ function historicoDeVenda() {
 // Já ter vendido o material pesa mais que estar escrito no cadastro.
 function sugerirFornecedores(itens, limite = 6) {
   const alvo = (itens || [])
-    .map((i) => ({ desc: i.descricao, pal: new Set(palavrasChave(i.descricao)) }))
+    .map((i) => ({ desc: i.descricao, item: i, pal: new Set(palavrasChave(i.descricao)) }))
     .filter((x) => x.pal.size);
   if (!alvo.length) return [];
 
@@ -81,6 +81,8 @@ function sugerirFornecedores(itens, limite = 6) {
     const motivos = [];
 
     for (const a of alvo) {
+      const vinculo = ofertaMaterial(f.id, a.item);
+      if (vinculo) { pontos += 100; motivos.push('catálogo vinculado: <b>' + esc(vinculo.nomeFornecedor) + '</b> · ' + esc(vinculo.unidade)); continue; }
       let jaVendeu = null;
       let maisPalavras = 0;
       for (const v of vendas) {
@@ -151,7 +153,7 @@ function htmlDatalistProdutos() {
 
 async function trazerProdutosDoMubi() {
   const fundo = abrirModal({
-    titulo: 'Trazer catálogo do Mubisys',
+    titulo: 'Matérias-primas do Mubisys',
     corpo: '<div id="prodCorpo"><div class="aviso info">Falando com o Mubisys… ' +
       'O ERP é lento (25 a 40 segundos por página) — pode deixar aberto.</div></div>',
     acoes: [{ texto: 'Fechar', aoClicar: () => fecharModal() }]
@@ -162,11 +164,13 @@ async function trazerProdutosDoMubi() {
     for (;;) {
       corpo.innerHTML = '<div class="aviso info">Trazendo — página ' + p +
         (paginas > 1 ? ' de ' + paginas : '') + '…</div>';
-      const r = await api('produtosMubi', { pagina: p });
+      const r = await api('produtosMubi', { pagina: p, catalogo: 'materias' });
       if (!r.ok) throw new Error(r.error || 'O Mubisys não respondeu');
       todos = todos.concat(r.produtos || []);
       paginas = r.paginas || 1;
-      if (!r.temMais || p >= 40) break;
+      if (!r.temMais) break;
+      if (p >= 40) throw new Error('Catálogo excede 40 páginas. O catálogo anterior foi mantido; a carga não foi concluída.');
+      if (!fundo.isConnected) return;
       p++;
     }
     // Mesmo nome repetido no ERP vira uma sugestão só.
@@ -176,17 +180,19 @@ async function trazerProdutosDoMubi() {
     S._catalogo = catalogo;
     try { localStorage.setItem(K_CATALOGO, JSON.stringify(catalogo)); } catch { /* aparelho cheio: fica só em memória */ }
     corpo.innerHTML = '<div class="aviso bom">' + catalogo.produtos.length +
-      ' produto(s) no catálogo. Agora eles aparecem enquanto você digita o material.</div>';
+      ' matéria(s)-prima(s) no catálogo. Agora eles aparecem enquanto você digita o material.</div>';
   } catch (e) {
     corpo.innerHTML = '<div class="aviso ruim">' + esc(e.message || 'Falha ao trazer o catálogo') + '</div>';
   }
 }
 
 function linhaItem(it = {}, comPreco = false) {
-  const uns = unidades();
+  const uns = [...new Set([...unidades(), it.unid].filter(Boolean))];
+  const mats = redeAtivos('mat');
+  if (it.materialId && !mats.some(m => m.id === it.materialId)) { const m = achar('mat', it.materialId); if (m) mats.push(m); }
   return '<div class="item-linha' + (comPreco ? ' com-preco' : '') + '" data-item' +
-    (it.id ? ' data-id="' + esc(it.id) + '"' : '') + '>' +
-    '<div class="campo descricao"><label>Descrição</label>' +
+    (it.id ? ' data-id="' + esc(it.id) + '"' : '') + ' data-nome-fornecedor="' + esc(it.nomeFornecedor || '') + '" data-codigo-fornecedor="' + esc(it.codigoFornecedor || '') + '">' +
+    '<div class="campo descricao"><label>Material padrão (opcional)</label><select data-i="materialId"><option value="">Descrição livre — sem agrupamento</option>' + mats.map(m => '<option value="' + esc(m.id) + '"' + (it.materialId === m.id ? ' selected' : '') + '>' + esc(m.nome) + ' · ' + esc(m.unidade) + '</option>').join('') + '</select><label>Descrição da compra</label>' +
       '<input type="text" data-i="descricao" value="' + esc(it.descricao || '') + '" placeholder="Material / serviço"' +
       (catalogoProdutos().produtos.length ? ' list="catalogoProdutos"' : '') + '></div>' +
     '<div class="campo"><label>Unid.</label><select data-i="unid">' +
@@ -207,6 +213,8 @@ function lerItens(raiz, comPreco) {
     return {
       id: l.dataset.id || (Date.now().toString(36) + i),
       n: i + 1,
+      materialId: v('materialId'),
+      nomeFornecedor: l.dataset.nomeFornecedor || '', codigoFornecedor: l.dataset.codigoFornecedor || '',
       descricao: v('descricao').trim(),
       unid: v('unid'),
       qtd: numeroBR(v('qtd')),
@@ -218,6 +226,10 @@ function lerItens(raiz, comPreco) {
 
 function ligarItens(caixa, comPreco) {
   const ligar = (linha) => {
+    const sm = linha.querySelector('[data-i=materialId]'), un = linha.querySelector('[data-i=unid]');
+    if (sm) sm.addEventListener('change', () => { const m = achar('mat', sm.value); if (!m) return; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; linha.querySelector('[data-i=descricao]').value = m.nome; if (![...un.options].some(o => o.value === m.unidade)) un.add(new Option(m.unidade, m.unidade)); un.value = m.unidade; });
+    un.addEventListener('change', () => { const m = sm && achar('mat',sm.value); if (m && m.unidade !== un.value) { sm.value = ''; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; toast('Unidade alterada: o vínculo com o material padrão foi retirado.'); } });
+    linha.querySelector('[data-i=descricao]').addEventListener('input', () => { if (sm && sm.value) { sm.value = ''; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; toast('Descrição alterada: selecione novamente o material padrão se for equivalente.'); } });
     const b = linha.querySelector('[data-tirar]');
     if (b) b.addEventListener('click', () => { linha.remove(); if (caixa.dataset.recalcula) recalcularOC(); });
     if (comPreco) linha.querySelectorAll('input').forEach((i) => i.addEventListener('input', () => {
@@ -419,6 +431,7 @@ function ligarBuscaOS(caixaItens, ligarItem) {
       info.innerHTML =
         '<div class="aviso bom" style="text-align:left">' +
           '<strong>O.S. ' + esc(r.os.numero) + ' — ' + esc(r.os.cliente || 'sem cliente') + '</strong><br>' +
+          '<small>Fonte: PCP · ' + (r.os.atualizadoPCPEm ? 'registro atualizado em ' + esc(fmt.dataHora(r.os.atualizadoPCPEm)) : 'data de atualização não informada') + '. Horário da importação do ERP não informado.</small><br>' +
           (r.os.servico ? esc(r.os.servico) + '<br>' : '') +
           (r.os.endereco ? '<small>' + esc(r.os.endereco) + '</small><br>' : '') +
           (itens.length ? '<small>' + itens.length + ' item(ns) na O.S.</small> ' +
@@ -705,6 +718,7 @@ TELAS.compras = function (el, args) {
   const filtro = S.filtroOC || { situacao: '', busca: '' };
   S.filtroOC = filtro;
   const filtradas = todas.filter((o) =>
+    (!filtro.periodo || noPeriodo(o, filtro.periodo)) &&
     (!filtro.situacao || o.situacao === filtro.situacao) &&
     (!filtro.busca || JSON.stringify(o).toLowerCase().includes(filtro.busca.toLowerCase())));
   const somaAberta = todas.filter((o) => ['emitida', 'enviada', 'confirmada', 'transito', 'parcial'].includes(o.situacao))
@@ -714,6 +728,7 @@ TELAS.compras = function (el, args) {
     '<a class="btn primario" href="#/compras/nova">+ Nova ordem de compra</a>');
 
   el.innerHTML =
+    (filtro.periodo ? '<div class="aviso info">Ordens de ' + esc(rotuloPeriodo(filtro.periodo)) + ' <button class="btn" id="limparPeriodoOC">Ver todos os períodos</button></div>' : '') +
     '<div class="filtros">' +
       '<input type="search" id="oBusca" placeholder="Buscar fornecedor, material, nº…" value="' + esc(filtro.busca) + '">' +
       '<select id="oSit"><option value="">Todas as situações</option>' +
@@ -750,6 +765,8 @@ TELAS.compras = function (el, args) {
       const c = document.getElementById('oBusca'); if (c) c.focus();
     }, 400);
   });
+  const limparPeriodo = el.querySelector('#limparPeriodoOC');
+  if (limparPeriodo) limparPeriodo.addEventListener('click', () => { delete S.filtroOC.periodo; render(); });
 };
 
 /* ── Editor da OC ──────────────────────────────────────────────────────────── */
@@ -829,6 +846,7 @@ function editorOC(el, id, scId) {
         '<div class="linha">' +
           campo('Destino', seletor('obraId', oc.obraId, obras().map((o) => ({ v: o.id, t: o.nome })))) +
           campo('Data de emissão', entrada('dataEmissao', oc.dataEmissao, { tipo: 'date' })) +
+          campo('Transportadora prevista', seletor('transportadoraId', oc.transportadoraId, opcoesRede('transp'), 'Ainda não definida')) +
           campo('Entrega prevista', entrada('entregaPrevista', oc.entregaPrevista, { tipo: 'date' })) +
         '</div>' +
         // Vincular a O.S. é OPCIONAL — compra de estoque não tem O.S. nenhuma.
@@ -1253,11 +1271,13 @@ function telaOC(el, id) {
             : '<div class="aviso atencao">Aguardando o número da ordem chegar do servidor. ' +
               'O link do fornecedor e o WhatsApp liberam assim que sincronizar.</div>') +
         '</div>' +
+        htmlReferenciasERP(o) +
         '<div class="cartao"><h3>Histórico</h3>' + linhaTempo(o.historico) + '</div>' +
         '<div class="cartao"><button class="btn perigo" id="apagarOC" style="width:100%">Apagar ordem de compra</button></div>' +
       '</div>' +
     '</div>';
 
+  ligarReferenciasERP(el, o);
   // Ações de fluxo
   el.querySelectorAll('[data-fluxo]').forEach((b) => b.addEventListener('click', () => avancarOC(o, b.dataset.fluxo)));
 
@@ -1429,8 +1449,7 @@ function editarPessoaEquipe(id) {
 let _mubiCache = null;   // vale enquanto o modal está aberto
 
 async function trazerFornecedoresDoMubi() {
-  const jaTenho = new Set(fornecedoresAtivos()
-    .map((f) => String(f.cnpj || '').replace(/\D/g, '')).filter(Boolean));
+  const jaTenho = fornecedoresAtivos();
 
   const fundo = abrirModal({
     titulo: 'Trazer fornecedores do Mubisys',
@@ -1459,6 +1478,8 @@ async function trazerFornecedoresDoMubi() {
         todos = todos.concat(r.fornecedores);
         paginas = r.paginas; total = r.total;
         if (!r.temMais) break;
+        if (!fundo.isConnected) return;
+        if (p >= 40) throw new Error('Importação excede 40 páginas. Nenhum fornecedor foi importado.');
         p += 1;
       }
       _mubiCache = { todos, paginas, total };
@@ -1468,7 +1489,7 @@ async function trazerFornecedoresDoMubi() {
     return;
   }
 
-  const novos = todos.filter((f) => !f.cnpj || !jaTenho.has(f.cnpj));
+  const novos = todos.filter((f) => !duplicidadeFornecedor(f, jaTenho));
   const repetidos = todos.length - novos.length;
 
   const desenhar = () => {
@@ -1485,7 +1506,7 @@ async function trazerFornecedoresDoMubi() {
         '</tr></thead><tbody>' +
         vendo.map((f) =>
           '<tr><td><input type="checkbox" data-mubi="' + esc(f.idMubi) + '"' +
-            (f.ativoNoErp ? ' checked' : '') + '></td>' +
+            '' + '></td>' +
           '<td><b>' + esc(f.nome) + '</b>' +
             (f.fantasia && f.fantasia !== f.nome ? '<div class="meta">' + esc(f.fantasia) + '</div>' : '') + '</td>' +
           '<td>' + esc(fmt.doc(f.cnpj) || '—') + '</td>' +
@@ -1500,7 +1521,7 @@ async function trazerFornecedoresDoMubi() {
 
   corpo.innerHTML =
     '<p class="legenda">' + total + ' cadastro(s) no Mubisys' +
-      (repetidos ? ' · ' + repetidos + ' já está(ão) aqui (conferido pelo CNPJ)' : '') + '</p>' +
+      (repetidos ? ' · ' + repetidos + ' já está(ão) aqui (conferido por ID do ERP ou CNPJ)' : '') + '</p>' +
     '<div class="linha">' +
       '<div class="campo"><label>Procurar</label>' +
         '<input type="text" id="mubiBusca" placeholder="nome, CNPJ ou atividade"></div>' +
@@ -1527,9 +1548,13 @@ async function trazerFornecedoresDoMubi() {
 
   document.getElementById('mubiImportar').addEventListener('click', () => {
     const ids = new Set(Array.from(corpo.querySelectorAll('[data-mubi]:checked')).map((x) => x.dataset.mubi));
-    const escolhidos = novos.filter((f) => ids.has(f.idMubi));
+    const escolhidos = novos.filter((f) => ids.has(f.idMubi) && !duplicidadeFornecedor(f, fornecedoresAtivos()));
     if (!escolhidos.length) { toast('Marque pelo menos um', 'ruim'); return; }
+    const importados = new Set();
     for (const f of escolhidos) {
+      const chave = f.cnpj || f.idMubi;
+      if (!chave || importados.has(chave) || duplicidadeFornecedor(f, fornecedoresAtivos())) continue;
+      importados.add(chave);
       salvar('forn', {
         nome: f.nome, cnpj: f.cnpj, ie: f.ie, contato: f.contato,
         telefone: f.telefone, email: f.email, endereco: f.endereco,
@@ -1540,7 +1565,7 @@ async function trazerFornecedoresDoMubi() {
       });
     }
     fecharEste(fundo); render();
-    toast(escolhidos.length + ' fornecedor(es) trazido(s) do Mubisys', 'bom');
+    toast(importados.size + ' fornecedor(es) trazido(s) do Mubisys', 'bom');
   });
 }
 
@@ -1961,6 +1986,7 @@ function telaReceberOC(o) {
         '<div class="linha" style="margin-top:12px">' +
           campo('Nota fiscal nº', entrada('nf', o.nf || '')) +
           campo('Quem recebeu', entrada('por', S.quem)) +
+          campo('Transportadora que entregou', seletor('transportadoraId', o.transportadoraId, opcoesRede('transp'), 'Ainda não informada')) +
         '</div>' +
         campo('Observação (avaria, falta, item trocado…)', areaTexto('obs', '')) +
         '<div class="campo"><label>Fotos da nota e da carga</label>' +
@@ -1993,7 +2019,7 @@ function telaReceberOC(o) {
         const reg = {
           id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
           em: new Date().toISOString(), por: d.por || S.quem,
-          itens: recebidos, nf: d.nf, obs: d.obs, fotos: fotos.slice(),
+          itens: recebidos, transportadoraId: d.transportadoraId, nf: d.nf, obs: d.obs, fotos: fotos.slice(),
           // Foto que não subiu fica anotada aqui para ser anexada depois.
           fotosPendentes: fotosPendentes.length
         };
@@ -2171,19 +2197,20 @@ TELAS.fornecedores = function (el, args) {
           ? '<button class="btn" id="trazerMubi">⬇️ Trazer fornecedores do Mubisys</button>' +
             '<button class="btn" id="trazerProdutos" title="' +
               (catalogoProdutos().produtos.length
-                ? catalogoProdutos().produtos.length + ' produto(s) guardados neste aparelho'
+                ? catalogoProdutos().produtos.length + ' item(ns) guardados · atualização: ' + fmt.dataHora(catalogoProdutos().em)
                 : 'Ainda não trouxe o catálogo') +
-            '">📦 Trazer catálogo de produtos</button>'
+            '">📦 Atualizar matérias-primas</button>'
           : '') +
         '<button class="btn primario" id="novoForn">+ Novo fornecedor</button>'
       : '<button class="btn primario" id="novaPessoa">+ Nova pessoa</button>');
 
   el.innerHTML =
-    '<div class="abas">' +
+    navRede('fornecedores') + '<div class="abas">' +
       '<button class="aba' + (_abaForn === 'mat' ? ' ativa' : '') + '" data-abaf="mat">🏢 Fornecedores (' + fs.length + ')</button>' +
       '<button class="aba' + (_abaForn === 'eq' ? ' ativa' : '') + '" data-abaf="eq">👤 Quem pede material (' + eq.length + ')</button>' +
     '</div>' +
-    (_abaForn === 'mat' ? htmlFornecedores(fs) : htmlEquipe(eq));
+    (_abaForn === 'mat' ? htmlDiretorioFornecedores(fs) + '<details class="cartao"><summary>Desempenho e contatos dos fornecedores</summary>' + htmlFornecedores(fs) + '</details>' : htmlEquipe(eq));
+  ligarBuscaRede(el);
 
   el.querySelectorAll('[data-abaf]').forEach((b) => b.addEventListener('click', () => {
     _abaForn = b.dataset.abaf;
@@ -2217,14 +2244,14 @@ TELAS.fornecedores = function (el, args) {
 function htmlFornecedores(todos) {
   // Melhor nota em cima: a lista vira a ordem de quem chamar primeiro.
   const comNota = todos.map((f) => Object.assign({ f }, notaFornecedor(f)))
-    .sort((a, b) => (b.nota == null ? -1 : b.nota) - (a.nota == null ? -1 : a.nota) ||
+    .sort((a, b) => Number(a.provisorio) - Number(b.provisorio) || (b.nota == null ? -1 : b.nota) - (a.nota == null ? -1 : a.nota) ||
       String(a.f.nome || '').localeCompare(String(b.f.nome || '')));
-  const bons = comNota.filter((x) => x.nota != null && x.nota >= 8.5).length;
-  const ruins = comNota.filter((x) => x.nota != null && x.nota < 5).length;
+  const bons = comNota.filter((x) => !x.provisorio && x.nota != null && x.nota >= 8.5).length;
+  const ruins = comNota.filter((x) => !x.provisorio && x.nota != null && x.nota < 5).length;
 
   return (comNota.some((x) => x.nota != null)
     ? '<div class="aviso info"><b>' + bons + ' preferencial(is)</b> e <b>' + ruins + ' para evitar</b>. ' +
-      'A nota é 60% do que o sistema mediu (prazo de entrega, entrega completa, resposta a cotação) ' +
+      'Notas provisórias não entram nessas classificações. Quando há as duas fontes, a nota é 60% do que o sistema mediu (prazo de entrega, entrega completa, resposta a cotação) ' +
       'e 40% das estrelas que a equipe deu. Clique no fornecedor para ver de onde saiu cada ponto.</div>'
     : '<div class="aviso info">A nota aparece sozinha conforme as compras acontecem — ' +
       'e melhora quando a equipe avalia cada entrega.</div>') +

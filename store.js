@@ -8,7 +8,7 @@
 // TODAS as coleções do sistema. Ao criar uma nova, acrescente AQUI (e no
 // COLECOES do nucleo.mjs) — era em dois lugares e a cotação chegava do
 // servidor mas era jogada fora por não existir nesta lista.
-const COLECOES_APP = ['sc', 'cot', 'oc', 'forn', 'equipe', 'doc', 'proj', 'trein'];
+const COLECOES_APP = ['sc', 'cot', 'oc', 'forn', 'equipe', 'doc', 'proj', 'trein', 'transp', 'mat', 'oferta', 'frete'];
 const regVazio = () => COLECOES_APP.reduce((a, c) => { a[c] = []; return a; }, {});
 
 const S = {
@@ -19,7 +19,7 @@ const S = {
   senhaHash: '',
   // Quem entrou: perfil manda no menu e nos botões. A porta de verdade é o
   // servidor — isto aqui só evita mostrar o que a pessoa não pode fazer.
-  perfil: 'direcao',
+  perfil: 'obra',
   usuarioId: '',
   acessoProprio: false,
   seqFila: 0,
@@ -105,7 +105,7 @@ function lerCache() {
   if (faltando) { try { localStorage.setItem(K.fila, JSON.stringify(S.fila)); } catch { /* segue */ } }
   S.quem = localStorage.getItem(K.quem) || '';
   S.senhaHash = localStorage.getItem(K.senha) || '';
-  S.perfil = localStorage.getItem(K.perfil) || 'direcao';
+  S.perfil = localStorage.getItem(K.perfil) || 'obra';
   S.usuarioId = localStorage.getItem(K.usuario) || '';
   S.acessoProprio = !!S.usuarioId;
   // Se o cache tiver se perdido (memória cheia), a fila reconstrói o que ainda

@@ -375,7 +375,7 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
   .hamburguer { display: block; }
   .pagina { padding: 16px 14px 70px; }
   .topo { padding: 10px 14px; }
-  .g2, .g3, .g4 { grid-template-columns: 1fr; }
+  .g2, .g3, .g4 { grid-template-columns: minmax(0, 1fr); }
   .g4.compacto, .g3.compacto { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .item-linha, .item-linha.com-preco { grid-template-columns: 1fr 1fr; }
   .item-linha .descricao { grid-column: 1 / -1; }
@@ -425,3 +425,78 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 .mais-condicoes > summary::-webkit-details-marker { display: none; }
 .mais-condicoes > summary::before { content: "▸ "; }
 .mais-condicoes[open] > summary::before { content: "▾ "; }
+
+/* Refinamento Impresilk: hierarquia, leitura e uso por teclado. */
+:root { --azul: #003da8; --azul-esc: #002b78; --azul-claro: #edf3ff; --dourado: #ce9e51; }
+.pagina { max-width: 1600px; }
+.lateral .marca img { width: 156px; height: auto; }
+.marca-topo img { max-width: 80%; height: auto; }
+.topo { flex-wrap: wrap; }
+.topo .dir { flex-wrap: wrap; }
+.cartao { box-shadow: 0 2px 8px rgba(20,42,70,.035); }
+.indicador .valor, td.num { font-variant-numeric: tabular-nums; }
+.tarefas { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.tarefa { min-height: 58px; text-align: left; }
+:focus-visible { outline: 3px solid #ce9e51; outline-offset: 3px; }
+.menu .grupo, .rodape-lateral { color: rgba(255,255,255,.78); }
+button, .btn { min-height: 40px; }
+@media(max-width:700px) {
+  .tarefas { grid-template-columns: 1fr; }
+  .topo { padding: 12px 16px; }
+  .topo .dir { width: 100%; margin-left: 0; gap: 8px; }
+  .pagina { padding: 16px 12px 40px; }
+  .topo .dir .btn { flex: 1; }
+  button, .btn { min-height: 44px; }
+}
+@media(prefers-reduced-motion:reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+.periodo select { min-width: 88px; }
+.periodo #perMes { min-width: 132px; }
+.valor-destaque { font-size: 1.8rem; font-variant-numeric: tabular-nums; color: var(--azul); }
+.linha-resumo { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--borda); padding:10px 0; }
+.dados-erp { display:grid; grid-template-columns:minmax(100px,1fr) 2fr; gap:8px 16px; overflow-wrap:anywhere; }
+.dados-erp dt { font-weight:600; } .dados-erp dd { margin:0; }
+#consultaERP label { display:flex; flex-direction:column; gap:6px; flex:1; min-width:135px; }
+#consultaERP { align-items:end; }
+#erpComparacao, .dados-erp { max-width:100%; }
+@media(max-width:700px) { .linha-resumo { flex-wrap:wrap; } #consultaERP label { min-width:100%; } }
+
+.confirmacao-erp { display:flex; align-items:center; gap:10px; padding:14px; border:1px solid var(--borda); border-radius:8px; margin-top:16px; cursor:pointer; }
+.confirmacao-erp input { width:20px; height:20px; flex:0 0 20px; accent-color:var(--azul); }
+
+/* Rede de suprimentos — diretório, cobertura e consulta operacional. */
+.rede-nav{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 22px}
+.rede-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:16px 0 24px}
+.rede-card{display:flex;flex-direction:column;gap:8px;margin:0;color:var(--texto);text-decoration:none;min-width:0;transition:border-color .15s,box-shadow .15s;border-top:3px solid #003da8}
+.rede-card:hover{border-color:#003da8;box-shadow:0 6px 20px #003da812}
+.rede-card h3,.rede-card p{margin:0;overflow-wrap:anywhere}
+.rede-card p{line-height:1.5;color:var(--texto-fraco)}
+.rede-kicker{font-size:.74rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#003da8}
+.rede-meta{display:flex;flex-wrap:wrap;gap:7px;margin-top:auto;padding-top:14px;font-size:.8rem}
+.rede-meta span{background:#f0f4fa;border-radius:6px;padding:5px 8px}
+.rede-ver{font-size:.82rem;font-weight:650;color:#003da8;padding-top:10px}
+.rede-titulo{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:12px 0 18px;flex-wrap:wrap}
+.rede-titulo h2,.rede-titulo h3{margin:4px 0}
+.rede-titulo p{margin:4px 0}
+.rede-titulo>.campo{max-width:210px;margin:0}
+.rede-pesquisa{max-width:620px;margin:18px 0}
+.rede-lista{border-top:1px solid var(--borda);margin-bottom:26px}
+.rede-linha{display:flex;gap:14px;align-items:center;padding:16px 0;border-bottom:1px solid var(--borda)}
+.rede-linha>div{flex:1;min-width:0;overflow-wrap:anywhere}
+.rede-linha p{margin:4px 0;color:var(--texto-fraco)}
+.rede-linha small{color:var(--texto-fraco)}
+.rede-icone{font-size:1.4rem;background:#eff4fb;padding:12px;border-radius:12px}
+.rede-vazio{padding:24px;background:#f5f7fb;border-radius:12px;margin-bottom:24px;color:var(--texto-fraco)}
+.rede-cobertura{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}
+.rede-cobertura h3{font-size:.9rem;margin:4px 0 8px}.rede-cobertura p{margin:0;white-space:pre-line;overflow-wrap:anywhere;color:var(--texto-fraco)}
+.rede-indicadores{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0}
+.rede-indicadores .cartao{margin:0;display:flex;flex-direction:column;gap:8px;padding:18px}
+.rede-indicadores strong{font-size:1.5rem;font-variant-numeric:tabular-nums;color:#003da8}
+.rede-indicadores span,.rede-indicadores small{color:var(--texto-fraco)}
+.rede-indicadores small{font-size:.73rem;line-height:1.4}
+.rede-conteudo{max-width:360px;min-width:180px;white-space:normal;overflow-wrap:anywhere}
+.item-linha .descricao select{font-size:.83rem;margin-bottom:6px;max-width:100%}
+.rede-grid [hidden]{display:none!important}
+@media(max-width:1150px){.rede-grid,.rede-cobertura{grid-template-columns:repeat(2,minmax(0,1fr))}.rede-indicadores{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.rede-grid,.rede-cobertura{grid-template-columns:1fr}.rede-linha{flex-wrap:wrap}.rede-linha>.rede-icone{display:none}.rede-linha>div{flex-basis:100%}.rede-titulo .acoes{width:100%;flex-wrap:wrap}.rede-indicadores strong{font-size:1.18rem}.rede-nav .btn{flex:1;justify-content:center;font-size:.82rem;padding:10px}.rede-indicadores .cartao{padding:14px}.rede-indicadores span{font-size:.8rem}}
+
+.rede-titulo>.acoes{display:flex;gap:8px;flex-wrap:wrap}

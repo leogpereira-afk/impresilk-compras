@@ -10,6 +10,10 @@ export const COLECOES: Record<string, { pre: string; nome: string }> = {
   sc:    { pre: "SC", nome: "Solicitação de compra" },
   cot:   { pre: "CT", nome: "Cotação" },
   oc:    { pre: "OC", nome: "Ordem de compra" },
+  transp: { pre: "", nome: "Transportadora" },
+  mat: { pre: "", nome: "Material padrão" },
+  oferta: { pre: "", nome: "Produto do fornecedor" },
+  frete: { pre: "", nome: "Entrega e frete" },
   forn:  { pre: "",   nome: "Fornecedor" },
   // Quem pede material dentro da empresa. Existe para o WhatsApp de chegada não
   // depender de alguém digitar o número de novo a cada pedido.

@@ -72,13 +72,19 @@ const fmt = {
   }
 };
 
-const hojeISO = () => new Date().toISOString().slice(0, 10);
+const hojeISO = () => {
+  const d = new Date();
+  return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
+};
 
 function diasAte(dataISO) {
-  if (!dataISO) return null;
-  const d = new Date(String(dataISO).slice(0, 10) + 'T12:00:00');
-  if (isNaN(d)) return null;
-  return Math.round((d - new Date(new Date().toDateString())) / 86400000);
+  const texto = String(dataISO || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(texto)) return null;
+  const [ano, mes, dia] = texto.split('-').map(Number);
+  const alvo = new Date(Date.UTC(ano, mes - 1, dia));
+  if (alvo.toISOString().slice(0, 10) !== texto) return null;
+  const hoje = new Date();
+  return Math.round((alvo.getTime() - Date.UTC(hoje.getFullYear(), hoje.getMonth(), hoje.getDate())) / 86400000);
 }
 
 /* ── Período (ano/mês) ──────────────────────────────────────────────────────

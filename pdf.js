@@ -256,7 +256,7 @@ async function pdfOC(o, cfg) {
     { titulo: 'TOTAL', largura: 29, alinha: 'right' }
   ];
   const linhas = (o.itens || []).map((i, n) => [
-    n + 1, i.descricao, i.marca || '', i.unid || '',
+    n + 1, i.descricao + (i.nomeFornecedor ? '\nNo fornecedor: ' + i.nomeFornecedor + (i.codigoFornecedor ? ' · cód. ' + i.codigoFornecedor : '') : ''), i.marca || '', i.unid || '',
     fmt.numero(i.qtd), fmt.brl(i.preco), fmt.brl((Number(i.qtd) || 0) * (Number(i.preco) || 0))
   ]);
   y = tabela(doc, y, colunas, linhas, (d) => cabecalhoPDF(d, logo, cfg, 'ORDEM DE COMPRA', o.codigo || ''));

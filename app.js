@@ -18,7 +18,7 @@ const PERFIS_APP = {
     desc: 'O dia a dia inteiro de compras: cota, negocia, emite ordem e cobra o ' +
       'fornecedor. Não cria acessos, não mexe nas configurações e não esvazia a lixeira.',
     telas: ['painel', 'solicitacoes', 'cotacoes', 'compras', 'recebimento',
-      'fornecedores', 'catalogos', 'manuais', 'treinamentos', 'acessos', 'config']
+      'fornecedores', 'transportadoras', 'materiais', 'catalogos', 'manuais', 'treinamentos', 'acessos', 'config']
   },
   obra: {
     txt: 'Solicitante (produção / instalação)',
@@ -30,9 +30,10 @@ const PERFIS_APP = {
   }
 };
 
-const perfilAtual = () => PERFIS_APP[S.perfil] ? S.perfil : 'direcao';
+const perfilAtual = () => PERFIS_APP[S.perfil] ? S.perfil : 'obra';
 const ehDirecao = () => perfilAtual() === 'direcao';
 function podeVer(rota) {
+  if (rota === 'conferencia') return perfilAtual() === 'direcao';
   const p = PERFIS_APP[perfilAtual()];
   return !p.telas || p.telas.includes(rota);
 }
@@ -53,6 +54,10 @@ const MENU = [
   { rota: 'cotacoes', icone: '💵', texto: 'Cotações', bolha: () => lista('cot').filter((c) => c.situacao === 'aberta').length },
   { rota: 'compras', icone: '🧾', texto: 'Ordens de compra', bolha: () => lista('oc').filter((o) => ['emitida', ...SIT_ESPERANDO].includes(o.situacao)).length },
   { rota: 'recebimento', icone: '📦', texto: 'Recebimento', bolha: () => lista('oc').filter((o) => SIT_ESPERANDO.includes(o.situacao)).length },
+  { rota: 'conferencia', icone: '🔎', texto: 'Conferência ERP' },
+  { grupo: 'Rede de suprimentos' },
+  { rota: 'transportadoras', icone: '🚚', texto: 'Transportadoras' },
+  { rota: 'materiais', icone: '📦', texto: 'Materiais padrão' },
   { rota: 'fornecedores', icone: '🏢', texto: 'Fornecedores' },
   // Acervo da comunicação visual: catálogo do que os fornecedores vendem,
   // manual do que a fábrica usa, e o treinamento de quem opera.
@@ -75,7 +80,7 @@ function montarShell() {
   app.innerHTML =
     '<div class="app">' +
       '<aside class="lateral">' +
-        '<div class="marca"><strong style="color:#fff;font-size:17px;letter-spacing:.5px">IMPRESILK</strong><small>Compras e suprimentos</small></div>' +
+        '<div class="marca"><img src="icons/logo-impresilk-branco.png" alt="Impresilk" width="156"><small>Compras e suprimentos</small></div>' +
         '<nav class="menu" id="menu"></nav>' +
         '<div class="rodape-lateral" id="rodapeLateral"></div>' +
       '</aside>' +
@@ -116,7 +121,7 @@ function pintarMenu(telaAtiva) {
     '<div>' + (!S.online ? 'sem internet — salvando no aparelho'
       : pend ? pend + ' item(ns) esperando envio'
       : S.erroSync ? 'erro: ' + esc(S.erroSync)
-      : 'tudo sincronizado') + '</div>' +
+      : S.ultimoPull ? 'Atualizado ' + new Date(S.ultimoPull).toLocaleString('pt-BR') : 'Aguardando atualização') + '</div>' +
     '<div class="rodape-botoes">' +
       '<button id="btnSincronizar" title="Buscar novidades e enviar o que está esperando">' +
         (S.sincronizando ? '⏳ sincronizando…' : '🔄 Sincronizar' + (pend ? ' (' + pend + ')' : '')) + '</button>' +
@@ -140,6 +145,7 @@ async function sincronizarAgora() {
   try {
     await subirFila();
     await puxar();
+    if (S.erroSync) throw new Error(S.erroSync);
     toast(pendAntes && !S.fila.length ? pendAntes + ' item(ns) enviado(s) · tudo em dia'
       : S.fila.length ? S.fila.length + ' item(ns) ainda esperando'
       : 'Tudo em dia', S.fila.length ? '' : 'bom');
@@ -170,6 +176,7 @@ async function sair() {
   } catch { /* modo privado */ }
   S.senhaHash = ''; S.perfil = 'direcao'; S.usuarioId = ''; S.acessoProprio = false;
   S.reg = regVazio(); S.fila = []; S.cfg = null;
+  consultaERP = null;
   location.hash = '#/painel';
   render();
 }
@@ -222,6 +229,11 @@ function render() {
 // Redesenha quando chegam dados novos — mas nunca por cima de quem está
 // digitando (formulário aberto ou campo em foco perderiam o que foi escrito).
 function renderSeSeguro() {
+  if (rotaAtual().tela === 'conferencia' && !ehDirecao()) {
+    consultaERP = null; S.formAberto = false;
+    if (document.querySelector('.fundo-modal')) fecharModal();
+    render(); return;
+  }
   // Tela pública (equipe preenchendo pedido) nunca é redesenhada por sincronização.
   if (PUBLICAS.includes(rotaAtual().tela)) return;
   if (document.querySelector('.fundo-modal')) { pintarMenuSeguro(); return; }
@@ -261,7 +273,7 @@ function telaEntrar() {
   app.dataset.shell = '';
   app.innerHTML =
     '<div class="publico"><div class="caixa" style="max-width:420px">' +
-      '<div class="marca-topo"><strong style="font-size:22px;letter-spacing:.5px">IMPRESILK</strong><p>Compras e suprimentos</p></div>' +
+      '<div class="marca-topo"><img src="icons/logo-impresilk.png" alt="Impresilk" width="190"><p>Compras e suprimentos</p></div>' +
       '<div class="cartao">' +
         '<h2>Entrar</h2>' +
         '<div class="campo"><label for="usuario">Usuário</label>' +
@@ -321,13 +333,16 @@ TELAS.painel = function (el) {
   const cots = lista('cot');
 
   const novas = scs.filter((s) => s.situacao === 'nova');
-  const emRota = ocs.filter((o) => SIT_ESPERANDO.includes(o.situacao));
+  const emRota = ocs.filter((o) => SIT_ESPERANDO.includes(o.situacao))
+    .sort((a, b) => (diasAte(a.entregaPrevista) ?? Infinity) - (diasAte(b.entregaPrevista) ?? Infinity));
+  const semPrevisao = emRota.filter((o) => diasAte(o.entregaPrevista) == null);
+  const semEnvio = ocs.filter((o) => o.situacao === 'emitida');
   const atrasadas = emRota.filter((o) => o.entregaPrevista && diasAte(o.entregaPrevista) < 0);
   const vencendo = docsVencendo(30);
 
   const cotsAbertas = cots.filter((c) => c.situacao === 'aberta');
   const cotsProntas = cotsAbertas.filter((c) =>
-    (c.fornecedores || []).length && (c.fornecedores || []).every((f) => f.respondidoEm));
+    (c.fornecedores || []).length && (c.fornecedores || []).every((f) => respondeu(f) && propostaCompleta(c, f)));
   const cotsVencidas = cotsAbertas.filter((c) => c.prazoResposta && diasAte(c.prazoResposta) < 0);
 
   // Dinheiro do PERÍODO escolhido (antes era sempre "deste mês", sem dizer
@@ -366,6 +381,9 @@ TELAS.painel = function (el) {
   if (cotsProntas.length) tarefa('💵', cotsProntas.length + ' cotação(ões) com todos os preços — falta decidir', 'cotacoes', true);
   if (cotsVencidas.length) tarefa('⏰', cotsVencidas.length + ' cotação(ões) passaram do prazo de resposta', 'cotacoes', true);
   if (atrasadas.length) tarefa('🚚', atrasadas.length + ' entrega(s) atrasada(s) — cobrar o fornecedor', 'recebimento', true);
+  if (semPrevisao.length) tarefa('📅', semPrevisao.length + ' entrega(s) sem previsão válida — combinar uma data', 'recebimento', false);
+  if (semEnvio.length) tarefa('📤', semEnvio.length + ' ordem(ns) emitida(s) aguardando envio', 'compras', false);
+  tarefas.sort((a, b) => Number(b.urgente) - Number(a.urgente));
   const docsVencidos = vencendo.filter((d) => diasAte(d.validadeEm) < 0);
   if (docsVencidos.length) tarefa('📘', docsVencidos.length + ' manual/documento vencido(s)', 'manuais', true);
 
@@ -377,7 +395,7 @@ TELAS.painel = function (el) {
   el.innerHTML =
     // ── a caixa que o gestor abre de manhã ──
     '<div class="cartao" style="border-left:4px solid var(--azul)">' +
-      '<h3>🎯 Para resolver hoje</h3>' +
+      '<h3>Prioridades de compras</h3><p class="legenda">Pendências de todos os períodos. Comece pelos itens em atenção.</p>' +
       (tarefas.length
         ? '<div class="tarefas">' + tarefas.map((t) =>
             '<button class="tarefa' + (t.urgente ? ' urgente' : '') + '" data-ir="' + esc(t.rota) + '">' +
@@ -407,8 +425,8 @@ TELAS.painel = function (el) {
       ? '<div class="grade g3 compacto" style="margin-bottom:16px">' +
         indicador('Comprado em ' + rotuloPeriodo(), fmt.brl(gastoMes),
           doMes.length + ' ordem(ns) · ' + fmt.brl(entregueMes) + ' já entregue', '', 'compras') +
-        indicador('A caminho', fmt.brl(aChegar),
-          emRota.length + ' ordem(ns)' + (atrasadas.length ? ' · ' + atrasadas.length + ' atrasada(s)' : ' no prazo'),
+        indicador('Ordens aguardando entrega', fmt.brl(aChegar),
+          emRota.length + ' ordem(ns)' + (atrasadas.length ? ' · ' + atrasadas.length + ' atrasada(s)' : semPrevisao.length ? ' · ' + semPrevisao.length + ' sem previsão' : ' com previsão'),
           atrasadas.length ? 'alerta' : '', 'recebimento') +
         indicador('Solicitações abertas', String(lista('sc').filter((x) => x.situacao === 'nova').length),
           'esperando aprovação', '', 'solicitacoes') +
@@ -416,12 +434,13 @@ TELAS.painel = function (el) {
       : '<div class="grade g3 compacto" style="margin-bottom:16px">' +
         indicador('Pedido em ' + rotuloPeriodo(), String(doMes.length), 'ordem(ns) de compra', '', '') +
         indicador('A caminho', String(emRota.length),
-          atrasadas.length ? atrasadas.length + ' atrasada(s)' : 'no prazo',
+          atrasadas.length ? atrasadas.length + ' atrasada(s)' : semPrevisao.length ? semPrevisao.length + ' sem previsão' : 'com previsão',
           atrasadas.length ? 'alerta' : '', 'recebimento') +
         indicador('Minhas solicitações', String(lista('sc').filter((x) => x.situacao === 'nova').length), 'esperando aprovação', '', 'solicitacoes') +
       '</div>') +
 
-    '<div class="grade g2">' +
+    htmlInteligenciaCompras() +
+    '<div class="grade">' +
       // ── chegando ──
       '<div class="cartao">' +
         '<h3>📦 Chegando</h3>' +
@@ -451,10 +470,10 @@ TELAS.painel = function (el) {
         const faltam = fs.filter((f) => !f.respondidoEm);
         const d = c.prazoResposta ? diasAte(c.prazoResposta) : null;
         return '<div class="arquivo-solto clicavel" data-ir="cotacoes/' + esc(c.id) + '">' +
-          '<span class="ic">' + (faltam.length ? '⏳' : '✅') + '</span><div style="flex:1;min-width:0">' +
+          '<span class="ic">' + (!fs.length ? '👥' : faltam.length ? '⏳' : '✅') + '</span><div style="flex:1;min-width:0">' +
           '<div class="nome">' + esc(c.codigo || '—') + ' · ' + (c.itens || []).length + ' item(ns)</div>' +
           '<div class="meta">' + (fs.length - faltam.length) + ' de ' + fs.length + ' responderam' +
-            (faltam.length ? ' · falta ' + esc(faltam.map((f) => f.nome).join(', ')) : ' — pronta para decidir') + '</div></div>' +
+            (!fs.length ? ' — adicione fornecedores' : faltam.length ? ' · falta ' + esc(faltam.map((f) => f.nome).join(', ')) : (fs.every(f => propostaCompleta(c, f)) ? ' — pronta para decidir' : ' — confira os itens não cotados')) + '</div></div>' +
           '<div class="acoes">' + (d == null ? '' : d < 0
             ? '<span class="etiqueta et-vencido">prazo venceu</span>'
             : '<span class="etiqueta">responder em ' + d + 'd</span>') + '</div></div>';
@@ -475,7 +494,7 @@ TELAS.painel = function (el) {
   // Clicar numa situação abre a lista de ordens JÁ FILTRADA por ela: o número
   // do painel e a lista passam a ser a mesma coisa vista de dois jeitos.
   el.querySelectorAll('[data-sit]').forEach((b) => b.addEventListener('click', () => {
-    S.filtroOC = Object.assign({ busca: '' }, S.filtroOC, { situacao: b.dataset.sit });
+    S.filtroOC = Object.assign({ busca: '' }, S.filtroOC, { situacao: b.dataset.sit, busca: '', periodo: { ...per } });
     irPara('compras');
   }));
   document.querySelectorAll('[data-acao="linkObra"]').forEach((b) => b.addEventListener('click', mostrarLinkObra));

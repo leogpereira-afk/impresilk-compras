@@ -130,6 +130,7 @@ function abrirNovaCotacao(sc, convidados) {
           fornecedores: pre.map((f, n) => ({
             id: Date.now().toString(36) + n + Math.random().toString(36).slice(2, 4),
             fornecedorId: f.id, nome: f.nome, telefone: f.telefone, contato: f.contato,
+            itensFornecedor: nomesParaFornecedor(f.id, itens),
             precos: {}, convidadoEm: new Date().toISOString()
           })),
           situacao: 'aberta', scIds: sc ? [sc.id] : []
@@ -157,10 +158,7 @@ function abrirNovaCotacao(sc, convidados) {
   });
 
   const caixa = document.getElementById('itensCot');
-  const ligar = (linha) => linha.querySelector('[data-tirar]').addEventListener('click', () => {
-    if (caixa.children.length > 1) linha.remove();
-  });
-  Array.from(caixa.children).forEach(ligar);
+  const ligar = ligarItens(caixa, false);
   document.getElementById('maisItemCot').addEventListener('click', () => {
     caixa.insertAdjacentHTML('beforeend', linhaItem({}, false));
     ligar(caixa.lastElementChild);
@@ -208,6 +206,7 @@ function telaCotacao(el, id) {
   }).join('');
 
   el.innerHTML =
+    htmlApoioCotacao(c) +
     (econ > 0
       ? '<div class="aviso bom">Entre a maior e a menor proposta há <b>' + fmt.brl(econ) + '</b> de diferença.</div>'
       : '') +
@@ -386,6 +385,7 @@ function convidarFornecedor(c) {
             novo.fornecedorId = f.id;
           }
         }
+        novo.itensFornecedor = nomesParaFornecedor(novo.fornecedorId, atual.itens);
         const n = Object.assign({}, atual, { fornecedores: [...(atual.fornecedores || []), novo] });
         n.historico = historiar(atual, 'Fornecedor convidado: ' + novo.nome);
         salvar('cot', n);
@@ -410,7 +410,7 @@ function pedirPrecoWhats(c, f) {
     '*' + ((S.cfg.empresa || {}).nomeCurto || 'Impresilk') + '* — Pedido de cotação *' + (c.codigo || '') + '*',
     'Destino: ' + (c.obra || ''),
     '',
-    ...(c.itens || []).map((i, n) => (n + 1) + '. ' + i.descricao + ' — ' + fmt.numero(i.qtd) + ' ' + (i.unid || '')),
+    ...(c.itens || []).map((i, n) => (n + 1) + '. ' + i.descricao + (((f.itensFornecedor || {})[i.id] || {}).nome ? ' (no seu catálogo: ' + f.itensFornecedor[i.id].nome + ')' : '') + ' — ' + fmt.numero(i.qtd) + ' ' + (i.unid || '')),
     '',
     c.prazoResposta ? 'Precisamos da resposta até ' + fmt.data(c.prazoResposta) + '.' : '',
     c.observacoes || '',
@@ -474,7 +474,7 @@ async function escolherFornecedor(c, fid) {
     // Item sem preço fica FORA da ordem: entrava com R$ 0,00 e o PDF ia para o
     // WhatsApp do fornecedor cobrando material de graça.
     itens: itensCotados(atual, f).map((i) => ({
-      id: i.id, descricao: i.descricao, unid: i.unid, qtd: i.qtd,
+      id: i.id, materialId: i.materialId, nomeFornecedor: ((f.itensFornecedor || {})[i.id] || {}).nome || '', codigoFornecedor: ((f.itensFornecedor || {})[i.id] || {}).codigo || '', descricao: i.descricao, unid: i.unid, qtd: i.qtd,
       preco: Number((f.precos || {})[i.id]) || 0
     })),
     frete: Number(f.frete) || 0,
@@ -549,7 +549,7 @@ async function telaCotarPublico(args) {
           '<div class="med-cab"><span>Item</span><span>Quantidade</span><span>Preço unitário</span><span>Total</span></div>' +
           c.itens.map((i) =>
             '<div class="med-linha" data-item="' + esc(i.id) + '">' +
-              '<div class="med-etapa"><b>' + esc(i.descricao) + '</b></div>' +
+              '<div class="med-etapa"><b>' + esc(i.descricao) + '</b>' + (i.nomeFornecedor ? '<div class="legenda">No seu catálogo: ' + esc(i.nomeFornecedor) + (i.codigoFornecedor ? ' · cód. ' + esc(i.codigoFornecedor) : '') + '</div>' : '') + '</div>' +
               '<div class="med-ant"><span class="med-rot">Quantidade</span>' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</div>' +
               '<div class="med-perc"><span class="med-rot">Preço unitário (R$)</span>' +
                 '<input type="text" inputmode="decimal" data-preco="' + esc(i.id) + '" ' +

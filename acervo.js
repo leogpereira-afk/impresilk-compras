@@ -104,7 +104,7 @@ TELAS.catalogos = function (el) {
   // compras. O servidor recusa a gravação — mostrar o botão só fazia a pessoa
   // preencher um formulário que sumia depois.
   const podeMexer = typeof podeEscrever !== 'function' || podeEscrever('proj');
-  cabecalho('Catálogos', todos.length + ' arquivo(s) · sempre a versão mais nova',
+  cabecalho('Catálogos', todos.length + ' catálogo(s) · arquivos e links',
     podeMexer ? '<button class="btn primario" id="subirProj">⬆️ Subir catálogo</button>' : '');
 
   el.innerHTML =
@@ -131,7 +131,7 @@ TELAS.catalogos = function (el) {
             (p.descricao ? '<div class="meta">' + esc(p.descricao) + '</div>' : '') +
           '</div>' +
           '<div class="acoes">' +
-            '<button class="btn pequeno primario" data-baixar="' + esc(p.id) + '">Baixar</button>' +
+            (p.arquivoId ? '<button class="btn pequeno primario" data-baixar="' + esc(p.id) + '">Baixar</button>' : urlCatalogo(p.url) ? '<a class="btn pequeno primario" href="' + esc(urlCatalogo(p.url)) + '" target="_blank" rel="noopener noreferrer">Abrir link ↗</a>' : '') +
             '<button class="btn pequeno" data-proj="' + esc(p.id) + '">⋯</button>' +
           '</div>' +
         '</div>').join('') + '</div>').join('')
@@ -182,7 +182,7 @@ TELAS.catalogos = function (el) {
 };
 
 // Pergunta destino/linha e só então manda os arquivos.
-function formularioCatalogo(files) {
+function formularioCatalogo(files, fornecedorId = '') {
   const arquivos = Array.from(files || []);
   if (!arquivos.length) return;
   abrirModal({
@@ -194,6 +194,7 @@ function formularioCatalogo(files) {
         campo('Linha de produto', seletor('disciplina', (cfgLista('disciplinas')[0] || 'Comunicação visual'), cfgLista('disciplinas'))) +
         campo('Revisão', entrada('revisao', 'R00', { placeholder: 'R00' })) +
       '</div>' +
+      campo('Fornecedor do catálogo', seletor('fornecedorId', fornecedorId, opcoesRede('forn'), 'Sem vínculo')) +
       campo('Descrição (opcional)', entrada('descricao', '', { placeholder: 'Ex.: catálogo de perfis de alumínio 2026' })) +
     '</div>',
     acoes: [
@@ -208,6 +209,7 @@ function formularioCatalogo(files) {
             arquivoId: meta.id,
             tamanho: file.size,
             mime: file.type,
+            fornecedorId: d.fornecedorId,
             obraId: d.obraId,
             obra: nomeObra(d.obraId),
             disciplina: d.disciplina,
@@ -229,6 +231,10 @@ function formularioCatalogo(files) {
 function menuCatalogo(id) {
   const p = achar('proj', id);
   if (!p) return;
+  if (p.url && !p.arquivoId) {
+    abrirModal({titulo:p.nome,corpo:'<p>'+esc(p.descricao||'Catálogo externo do fornecedor.')+'</p>'+(urlCatalogo(p.url)?'<a class="btn primario" href="'+esc(urlCatalogo(p.url))+'" target="_blank" rel="noopener noreferrer">Abrir catálogo ↗</a>':'<p>Link inválido.</p>'),acoes:[{texto:'Fechar',aoClicar:f=>fecharEste(f)},podeEscrever('proj')?{texto:'Editar',aoClicar:f=>{fecharEste(f);editarLinkCatalogo(p.id,p.fornecedorId);}}:null].filter(Boolean)});
+    return;
+  }
   abrirModal({
     titulo: p.nome,
     corpo:
