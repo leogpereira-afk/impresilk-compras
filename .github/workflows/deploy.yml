@@ -36,6 +36,7 @@ jobs:
           node tests/prazos.mjs
           node tests/integracao.mjs
           node tests/rede.mjs
+          node tests/produtos-transporte.mjs
           node tests/sintaxe-servidor.mjs
       - name: Separar arquivos públicos
         run: |

@@ -194,13 +194,14 @@ async function trazerProdutosDoMubi() {
   }
 }
 
+function descricaoMaterialPadrao(m){return m.nome+(m.especificacao?' — '+m.especificacao.replace(/\n/g,' · '):'');}
 function linhaItem(it = {}, comPreco = false) {
   const uns = [...new Set([...unidades(), it.unid].filter(Boolean))];
   const mats = redeAtivos('mat');
   if (it.materialId && !mats.some(m => m.id === it.materialId)) { const m = achar('mat', it.materialId); if (m) mats.push(m); }
   return '<div class="item-linha' + (comPreco ? ' com-preco' : '') + '" data-item' +
     (it.id ? ' data-id="' + esc(it.id) + '"' : '') + ' data-nome-fornecedor="' + esc(it.nomeFornecedor || '') + '" data-codigo-fornecedor="' + esc(it.codigoFornecedor || '') + '">' +
-    '<div class="campo descricao"><label>Material padrão (opcional)</label><select data-i="materialId"><option value="">Descrição livre — sem agrupamento</option>' + mats.map(m => '<option value="' + esc(m.id) + '"' + (it.materialId === m.id ? ' selected' : '') + '>' + esc(m.nome) + ' · ' + esc(m.unidade) + '</option>').join('') + '</select><label>Descrição da compra</label>' +
+    '<div class="campo descricao"><label>Material padrão (opcional)</label><select data-i="materialId"><option value="">Descrição livre — sem agrupamento</option>' + mats.map(m => '<option value="' + esc(m.id) + '"' + (it.materialId === m.id ? ' selected' : '') + '>' + esc(m.nome) + ' · ' + esc(m.unidade) + '</option>').join('') + '</select>' + (podeVer('materiais') ? '<button type="button" class="btn pequeno produto-montar-item" data-montar-produto>Montar produto por cor e medida</button>' : '') + '<label>Descrição da compra</label>' +
       '<input type="text" data-i="descricao" value="' + esc(it.descricao || '') + '" placeholder="Material / serviço"' +
       (catalogoProdutos().produtos.length ? ' list="catalogoProdutos"' : '') + '></div>' +
     '<div class="campo"><label>Unid.</label><select data-i="unid">' +
@@ -235,9 +236,11 @@ function lerItens(raiz, comPreco) {
 function ligarItens(caixa, comPreco) {
   const ligar = (linha) => {
     const sm = linha.querySelector('[data-i=materialId]'), un = linha.querySelector('[data-i=unid]');
-    if (sm) sm.addEventListener('change', () => { const m = achar('mat', sm.value); if (!m) return; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; linha.querySelector('[data-i=descricao]').value = m.nome; if (![...un.options].some(o => o.value === m.unidade)) un.add(new Option(m.unidade, m.unidade)); un.value = m.unidade; });
+    if (sm) sm.addEventListener('change', () => { const m = achar('mat', sm.value); if (!m) return; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; linha.querySelector('[data-i=descricao]').value = descricaoMaterialPadrao(m); if (![...un.options].some(o => o.value === m.unidade)) un.add(new Option(m.unidade, m.unidade)); un.value = m.unidade; });
     un.addEventListener('change', () => { const m = sm && achar('mat',sm.value); if (m && m.unidade !== un.value) { sm.value = ''; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; toast('Unidade alterada: o vínculo com o material padrão foi retirado.'); } });
     linha.querySelector('[data-i=descricao]').addEventListener('input', () => { if (sm && sm.value) { sm.value = ''; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; toast('Descrição alterada: selecione novamente o material padrão se for equivalente.'); } });
+    const montar=linha.querySelector('[data-montar-produto]');
+    if(montar)montar.onclick=()=>escolherModeloProduto(m=>{if(![...sm.options].some(o=>o.value===m.id))sm.add(new Option(m.nome+' · '+m.unidade,m.id));sm.value=m.id;sm.dispatchEvent(new Event('change'));});
     const b = linha.querySelector('[data-tirar]');
     if (b) b.addEventListener('click', () => { linha.remove(); if (caixa.dataset.recalcula) recalcularOC(); });
     if (comPreco) linha.querySelectorAll('input').forEach((i) => i.addEventListener('input', () => {
@@ -268,93 +271,21 @@ function totaisOC(oc) {
 /* ══════════════════════════════════════════════════════════════════════════
    SOLICITAÇÕES
    ══════════════════════════════════════════════════════════════════════════ */
+function solicitacaoPendente(s){return !['atendida','recusada','cancelada'].includes(s.situacao);}
+function acaoSolicitacao(s){return {nova:'Conferir e aprovar',aprovada:'Iniciar cotação ou compra',em_cotacao:'Acompanhar propostas',em_compra:'Acompanhar recebimento',atendida:'Consultar histórico',recusada:'Consultar motivo'}[s.situacao]||'Conferir solicitação';}
+function prioridadeSolicitacao(s){if(!solicitacaoPendente(s))return 9;if(s.urgencia==='critica')return 0;if(diasAte(s.necessidadeEm)!=null&&diasAte(s.necessidadeEm)<0)return 1;if(s.urgencia==='urgente')return 2;return 3;}
 TELAS.solicitacoes = function (el, args) {
-  if (args[0]) return telaSolicitacao(el, args[0]);
-
-  const todas = lista('sc');
-  const filtro = S.filtroSC || { situacao: '', obra: '', busca: '' };
-  S.filtroSC = filtro;
-
-  const doPeriodo = todas.filter((s) => noPeriodo(s));
-  const filtradas = doPeriodo.filter((s) =>
-    (!filtro.situacao || s.situacao === filtro.situacao) &&
-    (!filtro.obra || s.obraId === filtro.obra) &&
-    (!filtro.busca || JSON.stringify(s).toLowerCase().includes(filtro.busca.toLowerCase())));
-
-  const ORDEM_SIT_SC = ['nova', 'aprovada', 'em_cotacao', 'em_compra', 'atendida', 'recusada'];
-  const porSit = ORDEM_SIT_SC
-    .map((sit) => ({ sit, n: doPeriodo.filter((x) => x.situacao === sit).length }))
-    .filter((x) => x.n);
-
-  cabecalho('Solicitações de compra',
-    doPeriodo.length + ' em ' + rotuloPeriodo() + ' · ' + todas.length + ' no total',
-    seletorPeriodo() +
-    '<button class="btn" data-acao="linkObra">🔗 Link da empresa</button>' +
-    '<button class="btn primario" id="scNova">+ Nova solicitação</button>');
-
-  el.innerHTML =
-    '<div class="filtros">' +
-      '<input type="search" id="fBusca" placeholder="Buscar material, quem pediu…" value="' + esc(filtro.busca) + '">' +
-      '<select id="fSit"><option value="">Todas as situações</option>' +
-        ['nova', 'aprovada', 'em_cotacao', 'em_compra', 'recusada', 'atendida'].map((s) =>
-          '<option value="' + s + '"' + (filtro.situacao === s ? ' selected' : '') + '>' + esc(SITUACOES[s].txt) + '</option>').join('') +
-      '</select>' +
-      '<select id="fObra"><option value="">Todos os destinos</option>' +
-        obras().map((o) => '<option value="' + esc(o.id) + '"' + (filtro.obra === o.id ? ' selected' : '') + '>' + esc(o.nome) + '</option>').join('') +
-      '</select>' +
-    '</div>' +
-    (porSit.length
-      ? '<div class="faixa-status" style="margin-bottom:12px">' +
-        '<button class="chip-status" data-sit="">' + '<span class="etiqueta">Todas</span><b>' + doPeriodo.length + '</b></button>' +
-        porSit.map((x) => '<button class="chip-status' + (filtro.situacao === x.sit ? ' ativo' : '') + '" data-sit="' + esc(x.sit) + '">' +
-          etiqueta(x.sit) + '<b>' + x.n + '</b></button>').join('') +
-        '</div>'
-      : '') +
-    '<div class="cartao">' +
-      (filtradas.length ?
-        '<div class="tabela-rolagem"><table><thead><tr>' +
-          '<th>Nº</th><th>Quem pediu</th><th>Destino / setor</th><th>Itens</th><th>Situação</th><th>Quando</th>' +
-        '</tr></thead><tbody>' +
-        filtradas.map((s) =>
-          '<tr class="clicavel" data-id="' + esc(s.id) + '">' +
-            '<td><b>' + esc(s.codigo || '—') + '</b>' + (s._pendente ? ' <span class="pendente">enviando…</span>' : '') + '</td>' +
-            '<td>' + esc((s.solicitante || {}).nome || '—') + '<div style="font-size:.8rem;color:var(--texto-fraco)">' +
-              esc((s.solicitante || {}).funcao || '') + '</div></td>' +
-            '<td>' + esc(s.obra || nomeObra(s.obraId)) + '<div style="font-size:.8rem;color:var(--texto-fraco)">' + esc(s.setor || '') + '</div></td>' +
-            '<td>' + (s.itens || []).length + '</td>' +
-            '<td>' + etiqueta(s.situacao) + ' ' + etiquetaUrgencia(s.urgencia) + '</td>' +
-            '<td>' + fmt.data(dataDoRegistro(s)) +
-              '<div style="font-size:.8rem;color:var(--texto-fraco)">' + esc(fmt.quando(s.criadoEm)) + '</div></td>' +
-          '</tr>').join('') +
-        '</tbody></table></div>'
-        : vazio('📋', 'Nenhuma solicitação em ' + rotuloPeriodo(),
-            todas.length ? 'Troque o mês no alto da tela para ver as outras.'
-                         : 'Mande o link da empresa para o pessoal pedir material.')) +
-    '</div>';
-
-  el.querySelectorAll('tr[data-id]').forEach((tr) => tr.addEventListener('click', () => irPara('solicitacoes/' + tr.dataset.id)));
-  const aplicar = () => {
-    filtro.busca = document.getElementById('fBusca').value;
-    filtro.situacao = document.getElementById('fSit').value;
-    filtro.obra = document.getElementById('fObra').value;
-    render();
-  };
-  document.getElementById('fSit').addEventListener('change', aplicar);
-  document.getElementById('fObra').addEventListener('change', aplicar);
-  let t;
-  document.getElementById('fBusca').addEventListener('input', (e) => {
-    clearTimeout(t); const v = e.target.value;
-    t = setTimeout(() => {
-      filtro.busca = v; render();
-      const c = document.getElementById('fBusca'); if (c) c.focus();
-    }, 400);
-  });
-  document.getElementById('scNova').addEventListener('click', novaSolicitacaoInterna);
-  document.querySelectorAll('[data-acao="linkObra"]').forEach((b) => b.addEventListener('click', mostrarLinkObra));
-  ligarSeletorPeriodo();
-  el.querySelectorAll('[data-sit]').forEach((b) => b.addEventListener('click', () => {
-    filtro.situacao = b.dataset.sit; render();
-  }));
+  if(args[0])return telaSolicitacao(el,args[0]);
+  const todas=lista('sc'),filtro=S.filtroSC||{situacao:'',obra:'',busca:'',recorte:'pendentes'};S.filtroSC=filtro;if(!filtro.recorte)filtro.recorte='pendentes';
+  const periodo=todas.filter(s=>noPeriodo(s)),pendentes=todas.filter(solicitacaoPendente),base=filtro.recorte==='pendentes'?pendentes:filtro.recorte==='todas'?todas:periodo;
+  cabecalho('Solicitações de compra',pendentes.length+' pendentes · '+periodo.length+' em '+rotuloPeriodo(),seletorPeriodo()+'<button class="btn" data-acao="linkObra">🔗 Link da empresa</button><button class="btn primario" id="scNova">+ Nova solicitação</button>');
+  el.innerHTML='<nav class="cot-etapas" aria-label="Período das solicitações">'+[['pendentes','Pendentes · todos os meses',pendentes.length],['periodo',rotuloPeriodo(),periodo.length],['todas','Histórico completo',todas.length]].map(([v,t,n])=>'<button class="cot-chip" data-recorte-sc="'+v+'" aria-pressed="'+(filtro.recorte===v)+'"><span>'+esc(t)+'</span><b>'+n+'</b></button>').join('')+'</nav><div class="filtros sc-filtros">'+campo('Material, pessoa ou número','<input type="search" id="fBusca" placeholder="Ex.: ACM, nome ou SC-0020" value="'+esc(filtro.busca)+'">')+campo('Situação','<select id="fSit"><option value="">Todas as situações</option>'+['nova','aprovada','em_cotacao','em_compra','atendida','recusada'].map(v=>'<option value="'+v+'"'+(filtro.situacao===v?' selected':'')+'>'+esc(SITUACOES[v].txt)+'</option>').join('')+'</select>')+campo('Destino','<select id="fObra"><option value="">Todos os destinos</option>'+obras().map(o=>'<option value="'+esc(o.id)+'"'+(filtro.obra===o.id?' selected':'')+'>'+esc(o.nome)+'</option>').join('')+'</select>')+'</div><p class="legenda" id="scConta" role="status"></p><section class="cartao" id="scLista"></section>';
+  ligarRotulosRede(el);
+  function desenhar(){const filtradas=base.filter(s=>(!filtro.situacao||s.situacao===filtro.situacao)&&(!filtro.obra||s.obraId===filtro.obra)&&chaveNome([s.codigo,s.solicitante?.nome,s.setor,s.obra,...(s.itens||[]).map(i=>i.descricao)].join(' ')).includes(chaveNome(filtro.busca))).sort((a,b)=>prioridadeSolicitacao(a)-prioridadeSolicitacao(b)||String(a.necessidadeEm||'9999').localeCompare(String(b.necessidadeEm||'9999'))||String(a.codigo).localeCompare(String(b.codigo)));
+    el.querySelector('#scConta').textContent=filtradas.length+' solicitação(ões) · '+(filtro.recorte==='pendentes'?'ordenadas por prioridade, incluindo meses anteriores':filtro.recorte==='periodo'?rotuloPeriodo():'todos os períodos');
+    el.querySelector('#scLista').innerHTML=filtradas.length?filtradas.map(s=>{const ativa=solicitacaoPendente(s),d=diasAte(s.necessidadeEm),atraso=ativa&&d!=null&&d<0;return '<article class="sc-linha"><div><a class="cot-codigo" href="#/solicitacoes/'+esc(s.id)+'">'+esc(s.codigo||'Aguardando número')+' →</a>'+etiqueta(s.situacao)+(ativa?etiquetaUrgencia(s.urgencia):'')+(s._pendente?'<small>Enviando…</small>':'')+'</div><div><b>'+esc((s.itens||[]).map(i=>fmt.numero(i.qtd)+' '+(i.unid||'')+' '+i.descricao).join('; '))+'</b><small>'+esc(s.solicitante?.nome||'Solicitante não informado')+' · '+esc(s.obra||nomeObra(s.obraId))+' · '+esc(s.setor||'')+'</small><small>Pedido em '+fmt.data(dataDoRegistro(s))+'</small></div><div><span class="'+(atraso?'transp-atraso':'legenda')+'">'+(ativa?(d==null?'Prazo não informado':atraso?(-d)+' dia(s) após o prazo':d===0?'Precisa hoje':'Precisa até '+fmt.data(s.necessidadeEm)):'Finalizada')+'</span><a class="btn pequeno" href="#/solicitacoes/'+esc(s.id)+'">'+acaoSolicitacao(s)+'</a></div></article>';}).join(''):vazio('📋','Nenhuma solicitação neste filtro',filtro.recorte==='pendentes'?'As atendidas ficam no mês correspondente ou no Histórico completo.':'Ajuste a busca, a situação ou o período.');}
+  desenhar();el.querySelector('#fBusca').oninput=e=>{filtro.busca=e.target.value;desenhar();};el.querySelector('#fSit').onchange=e=>{filtro.situacao=e.target.value;desenhar();};el.querySelector('#fObra').onchange=e=>{filtro.obra=e.target.value;desenhar();};
+  el.querySelectorAll('[data-recorte-sc]').forEach(b=>b.onclick=()=>{filtro.recorte=b.dataset.recorteSc;filtro.situacao='';render();});document.getElementById('scNova').onclick=novaSolicitacaoInterna;document.querySelectorAll('[data-acao="linkObra"]').forEach(b=>b.onclick=mostrarLinkObra);ligarSeletorPeriodo();for(const id of ['perMes','perAno'])document.getElementById(id)?.addEventListener('change',()=>{filtro.recorte='periodo';filtro.situacao='';render();});
 };
 
 function novaSolicitacaoInterna() {
@@ -777,6 +708,26 @@ TELAS.compras = function (el, args) {
   if (limparPeriodo) limparPeriodo.addEventListener('click', () => { delete S.filtroOC.periodo; render(); });
 };
 
+function fornecedorMubiAtivo(f){return !!f&&String(f.origemMubi||'').trim()!==''&&f.ativo!==false&&f.ativoNoErp!==false&&!f.apagadoEm;}
+function fornecedoresMubiCadastrados(){return fornecedoresAtivos().filter(fornecedorMubiAtivo);}
+function dadosFornecedorOC(f){return Object.fromEntries(['nome','cnpj','ie','endereco','contato','telefone','email','origemMubi'].map(k=>[k,f?.[k]||'']));}
+function correspondenciaFornecedorMubi(f,atuais){
+  const id=String(f.idMubi||''),doc=String(f.cnpj||'').replace(/\D/g,'');
+  const matches=atuais.filter(x=>id&&String(x.origemMubi||'')===id||doc&&String(x.cnpj||'').replace(/\D/g,'')===doc);
+  if(matches.length>1)throw new Error('Há mais de um cadastro com esse ID ou documento. Revise os vínculos em Fornecedores antes de selecionar.');
+  const a=matches[0];if(a&&a.origemMubi&&String(a.origemMubi)!==id)throw new Error('O documento já está ligado a outro ID do Mubisys. Revise o cadastro antes de substituir.');
+  if(a&&a.cnpj&&doc&&String(a.cnpj).replace(/\D/g,'')!==doc)throw new Error('O documento do cadastro difere do Mubisys. Revise a identidade antes de atualizar.');
+  return a||null;
+}
+function buscarFornecedorMubiOC(aoSelecionar){
+  const fundo=abrirModal({titulo:'Selecionar fornecedor do Mubisys',largo:true,corpo:'<p class="legenda">Consulta ao cadastro do ERP. Selecionar importa ou atualiza somente este fornecedor, preservando seus vínculos e catálogos.</p><div class="linha">'+campo('Buscar nos fornecedores carregados','<input type="search" id="ocBuscaMubi" placeholder="Nome ou CNPJ…">')+'</div><p id="ocMubiEstado" role="status"></p><div id="ocMubiLista"></div><button class="btn" id="ocMubiMais">Carregar fornecedores</button>',acoes:[{texto:'Fechar',aoClicar:f=>fecharEste(f)}]});
+  ligarRotulosRede(fundo);let pagina=0,temMais=true,carregando=false,todos=[];
+  const busca=fundo.querySelector('#ocBuscaMubi'),mais=fundo.querySelector('#ocMubiMais'),estado=fundo.querySelector('#ocMubiEstado');
+  function desenhar(){const q=chaveNome(busca.value),visiveis=todos.filter(f=>f.ativoNoErp&&chaveNome([f.nome,f.fantasia,f.cnpj].join(' ')).includes(q)).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));fundo.querySelector('#ocMubiLista').innerHTML=visiveis.map(f=>'<article class="produto-salvo"><div><b>'+esc(f.nome)+'</b><small>'+esc(fmt.doc(f.cnpj)||'Documento não informado')+' · ID Mubi '+esc(f.idMubi)+'</small><small>'+esc([f.contato,f.telefone].filter(Boolean).join(' · '))+'</small></div><button class="btn pequeno" data-selecionar-mubi="'+esc(f.idMubi)+'">Selecionar</button></article>').join('')||'<p class="legenda">Nenhum fornecedor ativo encontrado nas páginas carregadas.</p>';fundo.querySelectorAll('[data-selecionar-mubi]').forEach(b=>b.onclick=()=>{const f=todos.find(x=>String(x.idMubi)===b.dataset.selecionarMubi);if(!f?.idMubi||!f.ativoNoErp)return;try{const antigo=correspondenciaFornecedorMubi(f,lista('forn')),salvo=salvar('forn',{...antigo,...dadosFornecedorOC(f),nome:f.nome,origemMubi:String(f.idMubi),categorias:antigo?.categorias||f.categorias||'',ativoNoErp:true,ativo:true,mubiConsultadoEm:new Date().toISOString()});fecharEste(fundo);aoSelecionar(salvo);}catch(e){toast(e.message,'ruim');}});}
+  async function carregar(){if(carregando||!temMais)return;carregando=true;mais.disabled=true;estado.textContent='Consultando página '+(pagina+1)+' no Mubisys…';try{const r=await api('fornecedoresMubi',{pagina:pagina+1});if(!fundo.isConnected)return;if(!r.ok||!Array.isArray(r.fornecedores))throw new Error(r.error||'Resposta do Mubisys indisponível.');pagina++;const porId=new Map(todos.map(f=>[String(f.idMubi),f]));for(const f of r.fornecedores)if(f.idMubi)porId.set(String(f.idMubi),f);todos=[...porId.values()];temMais=!!r.temMais;estado.textContent=todos.length+' cadastros carregados · página '+pagina+(temMais?' · carregue mais para ampliar a busca.':' · consulta completa.');mais.textContent='Carregar mais fornecedores';mais.hidden=!temMais||pagina>=40;desenhar();}catch(e){estado.textContent='Não foi possível consultar: '+e.message;mais.textContent='Tentar novamente';}finally{carregando=false;mais.disabled=false;}}
+  busca.oninput=desenhar;mais.onclick=carregar;carregar();
+}
+
 /* ── Editor da OC ──────────────────────────────────────────────────────────── */
 function editorOC(el, id, scId) {
   S.formAberto = true;
@@ -789,7 +740,7 @@ function editorOC(el, id, scId) {
     modalidade: 'CIF',
     notaFiscalObrigatoria: true,
     situacao: 'rascunho',
-    itens: sc ? (sc.itens || []).map((i) => ({ id: i.id, descricao: i.descricao, unid: i.unid, qtd: i.qtd, preco: 0 })) : [],
+    itens: sc ? (sc.itens || []).map((i) => ({ id: i.id, materialId:i.materialId||'', descricao: i.descricao, unid: i.unid, qtd: i.qtd, preco: 0 })) : [],
     scIds: sc ? [sc.id] : [],
     frete: 0, seguro: 0, desconto: 0, temDifal: false, difalValor: 0
   };
@@ -798,11 +749,11 @@ function editorOC(el, id, scId) {
 
   // Fornecedor já preenchido quando dá para saber quem é: a mesma conta que a
   // tela da solicitação usa para sugerir (cadastro + histórico de quem já
-  // vendeu aquilo). Vem como sugestão editável -- o campo continua livre.
+  // vendeu aquilo). Somente cadastros com origem confirmada no Mubisys.
   let sugerido = null;
   if (!existente && !oc.fornecedorId) {
     const cand = sugerirFornecedores((oc.itens || []).filter((i) => i && i.descricao), 1)[0];
-    if (cand && cand.forn) {
+    if (cand && fornecedorMubiAtivo(cand.forn)) {
       sugerido = cand;
       const x = cand.forn;
       oc.fornecedorId = x.id;
@@ -818,6 +769,7 @@ function editorOC(el, id, scId) {
   // `f` só depois do preenchimento automático: capturado antes, o formulário
   // saía com o select do cadastro marcado e os campos do fornecedor VAZIOS.
   const f = oc.fornecedor || {};
+  const fornecedorOriginal=existente?JSON.parse(JSON.stringify(f)):null;
 
   cabecalho(existente ? 'Editar ' + (oc.codigo || 'ordem de compra') : 'Nova ordem de compra',
     sc ? 'a partir da solicitação ' + sc.codigo : '',
@@ -826,26 +778,26 @@ function editorOC(el, id, scId) {
   el.innerHTML =
     '<div id="fOC">' +
       '<div class="cartao">' +
-        '<h3>🏢 Fornecedor</h3>' +
+        '<div class="rede-titulo"><h3>🏢 Fornecedor do Mubisys</h3>'+(ehDirecao()?'<button class="btn" id="ocFornecedorMubi" type="button">Buscar no Mubisys</button>':'')+'</div><p class="legenda">Selecione um fornecedor trazido do ERP. Cadastro e correções cadastrais são feitos no Mubisys.</p>' +
         (sugerido
           ? '<div class="aviso info" style="text-align:left">Já preenchi com <b>' + esc(sugerido.forn.nome) +
             '</b> — ' + esc(sugerido.motivos.join(' · ').replace(/<[^>]+>/g, '')) + '. Troque se não for esse.</div>'
           : '') +
         '<div class="linha">' +
-          campo('Escolher cadastrado', '<select id="selForn"><option value="">— digitar abaixo —</option>' +
-            fornecedoresAtivos().map((x) => '<option value="' + esc(x.id) + '"' + (oc.fornecedorId === x.id ? ' selected' : '') + '>' +
+          campo('Fornecedor importado do Mubisys', '<select id="selForn"><option value="">Selecione um fornecedor do Mubisys</option>'+(existente?'<option value="__historico__" selected>Manter fornecedor desta ordem · '+esc(f.nome||'registro original')+'</option>':'')+
+            fornecedoresMubiCadastrados().map((x) => '<option value="' + esc(x.id) + '"' + (!existente&&oc.fornecedorId === x.id ? ' selected' : '') + '>' +
               esc(x.nome) + '</option>').join('') + '</select>') +
-          campo('Nome / razão social', entrada('fornecedor.nome', f.nome)) +
-          campo('CNPJ', entrada('fornecedor.cnpj', f.cnpj, { inputmode: 'numeric' })) +
+          campo('Nome / razão social', entrada('fornecedor.nome', f.nome,{somenteLeitura:true})) +
+          campo('CNPJ', entrada('fornecedor.cnpj', f.cnpj, { inputmode: 'numeric',somenteLeitura:true })) +
         '</div>' +
         '<div class="linha">' +
-          campo('Contato / representante', entrada('fornecedor.contato', f.contato)) +
-          campo('WhatsApp', entrada('fornecedor.telefone', f.telefone, { tipo: 'tel' })) +
-          campo('E-mail', entrada('fornecedor.email', f.email, { tipo: 'email' })) +
+          campo('Contato / representante', entrada('fornecedor.contato', f.contato,{somenteLeitura:true})) +
+          campo('WhatsApp', entrada('fornecedor.telefone', f.telefone, { tipo: 'tel',somenteLeitura:true })) +
+          campo('E-mail', entrada('fornecedor.email', f.email, { tipo: 'email', somenteLeitura:true })) +
         '</div>' +
         '<div class="linha">' +
-          campo('Endereço', entrada('fornecedor.endereco', f.endereco)) +
-          campo('Inscrição estadual', entrada('fornecedor.ie', f.ie)) +
+          campo('Endereço', entrada('fornecedor.endereco', f.endereco,{somenteLeitura:true})) +
+          campo('Inscrição estadual', entrada('fornecedor.ie', f.ie,{somenteLeitura:true})) +
         '</div>' +
       '</div>' +
 
@@ -954,14 +906,15 @@ function editorOC(el, id, scId) {
     if (cx) cx.hidden = !chkDifal.checked;
     recalcularOC();
   });
-  document.getElementById('selForn').addEventListener('change', (e) => {
-    const x = achar('forn', e.target.value);
-    if (!x) return;
-    const set = (n, v) => { const c = el.querySelector('[data-campo="fornecedor.' + n + '"]'); if (c) c.value = v || ''; };
-    ['nome', 'cnpj', 'ie', 'endereco', 'contato', 'telefone', 'email'].forEach((n) => set(n, x[n]));
-    const banco = el.querySelector('[data-campo=dadosBancarios]');
-    if (banco && !banco.value && x.banco) banco.value = x.banco;
-  });
+  function preencherFornecedorOC(){
+    const valor=document.getElementById('selForn').value,x=valor==='__historico__'?fornecedorOriginal:achar('forn',valor);
+    const set=(n,v)=>{const c=el.querySelector('[data-campo="fornecedor.'+n+'"]');if(c)c.value=v||'';};
+    ['nome','cnpj','ie','endereco','contato','telefone','email'].forEach(n=>set(n,x?.[n]));
+    const banco=el.querySelector('[data-campo=dadosBancarios]');if(banco&&!banco.value&&x?.banco)banco.value=x.banco;
+  }
+  document.getElementById('selForn').addEventListener('change',preencherFornecedorOC);
+  const buscarForn=el.querySelector('#ocFornecedorMubi');if(buscarForn)buscarForn.onclick=()=>buscarFornecedorMubiOC(x=>{const sel=document.getElementById('selForn');if(!sel)return;if(![...sel.options].some(o=>o.value===x.id))sel.add(new Option(x.nome,x.id));sel.value=x.id;preencherFornecedorOC();});
+  ligarRotulosRede(el);
   document.getElementById('puxarSC').addEventListener('click', () => puxarDeSolicitacoes(caixa, ligar));
   recalcularOC();
 
@@ -1006,13 +959,15 @@ function editorOC(el, id, scId) {
     const d = lerCampos(document.getElementById('fOC'));
     const itens = lerItens(caixa, true);
     if (!itens.length) { toast('Inclua pelo menos um item', 'ruim'); return; }
-    if (!d.fornecedor.nome.trim()) { toast('Informe o fornecedor', 'ruim'); return; }
+    const fornecedorIdSelecionado=document.getElementById('selForn').value,manterHistorico=!!existente&&fornecedorIdSelecionado==='__historico__',fornecedorAtual=achar('forn',fornecedorIdSelecionado);
+    if(!manterHistorico&&!fornecedorMubiAtivo(fornecedorAtual)){toast('Selecione um fornecedor do Mubisys. Use a busca para trazer o cadastro.','ruim');return;}
+    d.fornecedor=manterHistorico?fornecedorOriginal:dadosFornecedorOC(fornecedorAtual);
 
     const novo = Object.assign({}, oc, d, {
       itens,
       obra: nomeObra(d.obraId),
-      // Voltar para "— digitar abaixo —" desliga o vínculo com o cadastrado.
-      fornecedorId: document.getElementById('selForn').value,
+      // A edição preserva o retrato original até o usuário escolher outro cadastro.
+      fornecedorId: manterHistorico?(oc.fornecedorId||''):fornecedorAtual.id,
       // ipiPerc/icmsPerc NÃO são lidos do formulário (saíram da tela): ficam
       // com o valor já gravado, senão editar uma ordem antiga zeraria imposto
       // que está no total dela e o número mudaria sozinho.
@@ -1076,11 +1031,6 @@ function editorOC(el, id, scId) {
       salvar('sc', nsc);
     }
     S.scPuxadas = [];
-    // Cadastra o fornecedor novo, se ainda não existir.
-    if (!novo.fornecedorId && novo.fornecedor.nome) {
-      const jaTem = fornecedoresAtivos().find((x) => x.nome.toLowerCase() === novo.fornecedor.nome.toLowerCase());
-      if (!jaTem) salvar('forn', Object.assign({}, novo.fornecedor, { banco: novo.dadosBancarios || '' }));
-    }
     S.formAberto = false;
     irPara('compras/' + salvo.id);
     // O número digitado e não conferido não vira vínculo — mas some em
@@ -1149,7 +1099,7 @@ function puxarDeSolicitacoes(caixa, ligar) {
           const s = achar('sc', c.dataset.sc);
           const it = (s.itens || [])[Number(c.dataset.idx)];
           if (!it) continue;
-          caixa.insertAdjacentHTML('beforeend', linhaItem({ descricao: it.descricao, unid: it.unid, qtd: it.qtd }, true));
+          caixa.insertAdjacentHTML('beforeend', linhaItem({ materialId:it.materialId||'', descricao: it.descricao, unid: it.unid, qtd: it.qtd }, true));
           ligar(caixa.lastElementChild);
         }
         // Guarda a ligação para marcar as solicitações como atendidas ao salvar.

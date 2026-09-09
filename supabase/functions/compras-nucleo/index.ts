@@ -1,3 +1,4 @@
+import { consultarVendedoresPublicos } from "../_shared/vendedores.ts";
 import { validarRede, ErroRede } from "../_shared/rede.ts";
 // ============================================================================
 // compras-nucleo — backend do COMPRAS da Impresilk.
@@ -285,6 +286,7 @@ function limparSolicitacao(r: any) {
       nome: txt(r.solicitante && r.solicitante.nome, 80),
       telefone: txt(r.solicitante && r.solicitante.telefone, 30),
       funcao: txt(r.solicitante && r.solicitante.funcao, 60),
+      vendedorMubiId: txt(r.solicitante && r.solicitante.vendedorMubiId, 80),
     },
     setor: txt(r.setor, 60),
     urgencia: ["normal", "urgente", "critica"].includes(r.urgencia) ? r.urgencia : "normal",
@@ -333,7 +335,7 @@ Deno.serve(async (req) => {
   // backup), servidor-a-servidor com o x-token deste sistema — não há pessoa
   // logada, logo não há crachá. O x-token é o gate: é secret do Supabase, não
   // viaja para navegador nenhum além do próprio app.
-  const PUBLICAS = ["ping", "cfgPublico", "novaSolicitacao", "andamento", "verPublico",
+  const PUBLICAS = ["ping", "cfgPublico", "vendedoresPublicos", "novaSolicitacao", "andamento", "verPublico",
     "verCotacao", "responderCotacao"];
   // O backup do Hub não tem pessoa logada (é servidor a servidor), então estas
   // duas passam sem crachá — mas SÓ com o token de backup, nunca com o público.
@@ -361,6 +363,11 @@ Deno.serve(async (req) => {
       // em massa sem deixar rastro. Quem quer conferir a senha usa 'entrar'.
       case "ping":
         return json({ ok: true, runtime: "supabase" });
+
+      case "vendedoresPublicos": {
+        try{return json({ok:true,...await consultarVendedoresPublicos(),origem:"Mubisys"});}
+        catch(e){return json({ok:false,error:(e as Error).message},502);}
+      }
 
       case "conferenciaMubi": {
         // Confirma o papel explicitamente, inclusive para credenciais de backup.
@@ -689,6 +696,12 @@ Deno.serve(async (req) => {
       // ── PÚBLICO: a equipe pede material sem senha ───────────────────────────
       case "novaSolicitacao": {
         const limpo: any = limparSolicitacao(body.registro || {});
+        if(limpo.solicitante.vendedorMubiId){
+          const lista=await consultarVendedoresPublicos(),v=lista.vendedores.find(x=>x.id===limpo.solicitante.vendedorMubiId);
+          if(!v)return json({ok:false,error:"Vendedor não disponível. Atualize a lista e selecione novamente."},400);
+          limpo.solicitante.nome=v.nome;limpo.solicitante.funcao="Vendedor";limpo.solicitante.origemNome="Mubisys";
+        }
+        if(limpo.itens.some((i:any)=>!Number.isFinite(i.qtd)||i.qtd<=0))return json({ok:false,error:"Informe uma quantidade positiva para cada material."},400);
         if (!limpo.solicitante.nome) return json({ ok: false, error: "Informe seu nome" }, 400);
         if (!limpo.itens.length) return json({ ok: false, error: "Inclua pelo menos um item" }, 400);
         const autor = limpo.solicitante.nome;

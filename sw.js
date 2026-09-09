@@ -1,10 +1,10 @@
 /* Service worker — deixa o app abrir sem internet (a obra costuma ter sinal ruim).
    Regra do kit: SUBIR o número do CACHE a cada publicação, senão o navegador
    continua servindo o arquivo velho. */
-const CACHE = 'compras-shell-v18';
+const CACHE = 'compras-shell-v19';
 const ARQUIVOS = [
   './icons/logo-impresilk.png', './icons/logo-impresilk-branco.png', './', './index.html', './styles.css', './config.js', './store.js', './ui.js',
-  './pdf.js', './qualificacao.js', './compras.js', './acervo.js', './cotacao.js', './app.js', './inteligencia.js', './conferencia.js', './rede.js', './transporte.js',
+  './pdf.js', './qualificacao.js', './compras.js', './acervo.js', './cotacao.js', './app.js', './inteligencia.js', './conferencia.js', './rede.js', './produtos.js', './transporte.js',
   './libs/jspdf.umd.min.js', './auth.js',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'
 ];

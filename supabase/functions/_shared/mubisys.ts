@@ -1,5 +1,5 @@
 // Consultas somente GET. Recurso e parâmetros são definidos pelo servidor.
-export const RECURSOS_MUBI = ['fornecedor', 'cliente', 'produto', 'materia-prima', 'nota-fiscal-recebida', 'contas-pagar'];
+export const RECURSOS_MUBI = ['usuario', 'usuario/vendedor', 'fornecedor', 'cliente', 'produto', 'materia-prima', 'nota-fiscal-recebida', 'contas-pagar'];
 export function dataMubi(v: unknown): string {
   const s = String(v ?? '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error('Informe datas válidas.');

@@ -41,5 +41,8 @@ jobs:
       - name: Rede de suprimentos
         run: node tests/rede.mjs
 
+      - name: Produtos e transporte
+        run: node tests/produtos-transporte.mjs
+
       - name: Sintaxe do servidor
         run: node tests/sintaxe-servidor.mjs

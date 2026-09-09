@@ -57,7 +57,7 @@ const MENU = [
   { rota: 'conferencia', icone: '🔎', texto: 'Conferência ERP' },
   { grupo: 'Rede de suprimentos' },
   { rota: 'transportadoras', icone: '🚚', texto: 'Transportadoras' },
-  { rota: 'materiais', icone: '📦', texto: 'Materiais padrão' },
+  { rota: 'materiais', icone: '📦', texto: 'Produtos e materiais' },
   { rota: 'fornecedores', icone: '🏢', texto: 'Fornecedores' },
   // Acervo da comunicação visual: catálogo do que os fornecedores vendem,
   // manual do que a fábrica usa, e o treinamento de quem opera.
@@ -333,7 +333,7 @@ TELAS.painel = function (el) {
   const cots = lista('cot');
 
   const novas = scs.filter((s) => s.situacao === 'nova');
-  const emRota = ocs.filter((o) => SIT_ESPERANDO.includes(o.situacao))
+  const emRota = ocs.filter((o) => SIT_ESPERANDO.includes(o.situacao)&&saldoMaterial(o).itens.some(i=>i.falta>0))
     .sort((a, b) => (diasAte(a.entregaPrevista) ?? Infinity) - (diasAte(b.entregaPrevista) ?? Infinity));
   const semPrevisao = emRota.filter((o) => diasAte(o.entregaPrevista) == null);
   const semEnvio = ocs.filter((o) => o.situacao === 'emitida');
@@ -361,31 +361,7 @@ TELAS.painel = function (el) {
   const porSituacao = ORDEM_SIT
     .map((sit) => ({ sit, ocs: doPeriodoTodas.filter((o) => o.situacao === sit) }))
     .filter((x) => x.ocs.length);
-  const aChegar = emRota.reduce((s, o) => s + (Number(o.totalLiquido) || 0), 0);
-
-  // ── O que precisa de decisão HOJE ─────────────────────────────────────────
-  const tarefas = [];
-  const tarefa = (icone, texto, rota, urgente) => {
-    if (podeVer(rota)) tarefas.push({ icone, texto, rota, urgente });
-  };
-  if (novas.length) tarefa('📋', novas.length + ' solicitação(ões) esperando você aprovar', 'solicitacoes',
-    novas.some((s) => s.urgencia === 'critica'));
-  // Solicitação aprovada que não tem cotação nem compra andando ficava
-  // invisível: o painel só contava as "novas", e o pedido devolvido pelo
-  // cancelamento de uma compra sumia da vista de todo mundo.
-  const paradas = scs.filter((s) => s.situacao === 'aprovada' &&
-    !(s.cotIds || []).some((id) => { const c = achar('cot', id); return c && !c.apagadoEm && c.situacao === 'aberta'; }) &&
-    !(s.ocIds || []).some((id) => { const o = achar('oc', id); return o && !o.apagadoEm && o.situacao !== 'cancelada'; }));
-  if (paradas.length) tarefa('⏸️', paradas.length + ' solicitação(ões) aprovada(s) sem cotação nem compra andando',
-    'solicitacoes', paradas.some((s) => s.urgencia === 'critica'));
-  if (cotsProntas.length) tarefa('💵', cotsProntas.length + ' cotação(ões) com todos os preços — falta decidir', 'cotacoes', true);
-  if (cotsVencidas.length) tarefa('⏰', cotsVencidas.length + ' cotação(ões) passaram do prazo de resposta', 'cotacoes', true);
-  if (atrasadas.length) tarefa('🚚', atrasadas.length + ' entrega(s) atrasada(s) — cobrar o fornecedor', 'recebimento', true);
-  if (semPrevisao.length) tarefa('📅', semPrevisao.length + ' entrega(s) sem previsão válida — combinar uma data', 'recebimento', false);
-  if (semEnvio.length) tarefa('📤', semEnvio.length + ' ordem(ns) emitida(s) aguardando envio', 'compras', false);
-  tarefas.sort((a, b) => Number(b.urgente) - Number(a.urgente));
-  const docsVencidos = vencendo.filter((d) => diasAte(d.validadeEm) < 0);
-  if (docsVencidos.length) tarefa('📘', docsVencidos.length + ' manual/documento vencido(s)', 'manuais', true);
+  const saldosPainel=emRota.map(saldoMaterial),aChegar=saldosPainel.some(s=>s.valorItens==null)?null:saldosPainel.reduce((s,x)=>s+x.valorItens,0);
 
   cabecalho('Painel', 'Visão geral das compras',
     seletorPeriodo() +
@@ -393,16 +369,7 @@ TELAS.painel = function (el) {
     (podeVer('cotacoes') ? '<a class="btn primario" href="#/cotacoes">Pedir cotação</a>' : ''));
 
   el.innerHTML =
-    // ── a caixa que o gestor abre de manhã ──
-    '<div class="cartao" style="border-left:4px solid var(--azul)">' +
-      '<h3>Prioridades de compras</h3><p class="legenda">Pendências de todos os períodos. Comece pelos itens em atenção.</p>' +
-      (tarefas.length
-        ? '<div class="tarefas">' + tarefas.map((t) =>
-            '<button class="tarefa' + (t.urgente ? ' urgente' : '') + '" data-ir="' + esc(t.rota) + '">' +
-              '<span class="ic">' + t.icone + '</span><span>' + esc(t.texto) + '</span>' +
-              '<span class="seta">›</span></button>').join('') + '</div>'
-        : '<p class="legenda">Nada parado esperando decisão.</p>') +
-    '</div>' +
+    htmlCentralDecisoes() +
 
     // ── como estão as compras do período ──
     (podeVer('compras') && porSituacao.length
@@ -425,8 +392,8 @@ TELAS.painel = function (el) {
       ? '<div class="grade g3 compacto" style="margin-bottom:16px">' +
         indicador('Comprado em ' + rotuloPeriodo(), fmt.brl(gastoMes),
           doMes.length + ' ordem(ns) · ' + fmt.brl(entregueMes) + ' já entregue', '', 'compras') +
-        indicador('Ordens aguardando entrega', fmt.brl(aChegar),
-          emRota.length + ' ordem(ns)' + (atrasadas.length ? ' · ' + atrasadas.length + ' atrasada(s)' : semPrevisao.length ? ' · ' + semPrevisao.length + ' sem previsão' : ' com previsão'),
+        indicador('Material ainda a receber · todos os meses', aChegar==null?'Preço incompleto':fmt.brl(aChegar),
+          emRota.length + ' ordem(ns) · sem rateio de frete e encargos' + (atrasadas.length ? ' · ' + atrasadas.length + ' atrasada(s)' : semPrevisao.length ? ' · ' + semPrevisao.length + ' sem previsão' : ' com previsão'),
           atrasadas.length ? 'alerta' : '', 'recebimento') +
         indicador('Solicitações abertas', String(lista('sc').filter((x) => x.situacao === 'nova').length),
           'esperando aprovação', '', 'solicitacoes') +
@@ -454,7 +421,7 @@ TELAS.painel = function (el) {
             (podeVer('compras') ? 'compras/' + esc(o.id) : 'recebimento') + '">' +
             '<span class="ic">🚚</span><div style="flex:1;min-width:0">' +
             '<div class="nome">' + esc(o.codigo || '—') +
-              (podeVer('compras') ? ' · ' + fmt.brl(o.totalLiquido) : '') + '</div>' +
+              (podeVer('compras') ? ' · saldo de itens '+(saldoMaterial(o).valorItens==null?'sem preço completo':fmt.brl(saldoMaterial(o).valorItens)) : '') + '</div>' +
             '<div class="meta">' + esc((o.fornecedor || {}).nome || '—') + ' · ' +
               esc((o.itens || []).map((i) => i.descricao).join(', ').slice(0, 50)) + '</div></div>' +
             '<div class="acoes">' + aviso + '</div></div>';
@@ -1099,7 +1066,7 @@ function molduraPublica(conteudo, sub) {
   document.getElementById('app').dataset.shell = '';
   document.getElementById('app').innerHTML =
     '<div class="publico"><div class="caixa">' +
-      '<div class="marca-topo"><strong style="font-size:22px">IMPRESILK</strong>' +
+      '<div class="marca-topo"><img src="icons/logo-impresilk-branco.png" alt="Impresilk" width="150">' +
       '<p>' + esc(sub || '') + '</p></div>' + conteudo + '</div></div>';
 }
 
@@ -1141,6 +1108,7 @@ async function telaSolicitar() {
     '<div class="cartao">' +
       '<h2>Pedir material</h2>' +
       '<p class="legenda">Preencha e envie. O setor de compras recebe na hora e você acompanha pelo número do pedido.</p>' +
+      '<div class="publico-vendedor"><h3>Quem está pedindo?</h3><button class="btn" id="pBuscarVendedores" type="button">Selecionar vendedor do Mubisys</button><div id="pVendedores" hidden>'+campo('Vendedor do Mubisys','<select id="pVendedor"><option value="">Selecione seu nome</option></select>')+'</div><p id="pVendedorEstado" class="legenda" role="status">Você também pode informar seus dados abaixo se não for vendedor.</p></div>' +
       '<div class="linha">' +
         campo('Seu nome', '<input type="text" id="pNome" value="' + esc(lembrado.nome || '') + '" placeholder="Nome de quem está pedindo">') +
         campo('Seu WhatsApp', '<input type="tel" id="pTel" value="' + esc(lembrado.telefone || '') + '" inputmode="tel" placeholder="(38) 9 9999-9999">') +
@@ -1169,6 +1137,11 @@ async function telaSolicitar() {
     '<div style="text-align:center"><a class="btn fantasma" href="#/acompanhar">Ver o andamento das compras</a></div>',
     'Solicitação de material');
 
+  ligarRotulosRede(document.querySelector('#app'));
+  let vendedoresLink=[];
+  const selVendedor=document.getElementById('pVendedor'),bVendedores=document.getElementById('pBuscarVendedores'),nomeLink=document.getElementById('pNome'),funcaoLink=document.getElementById('pFuncao');
+  bVendedores.onclick=async()=>{bVendedores.disabled=true;const estado=document.getElementById('pVendedorEstado');estado.textContent='Consultando vendedores ativos no Mubisys…';try{const r=await api('vendedoresPublicos',{}, {publico:true});if(!r.ok||!Array.isArray(r.vendedores))throw new Error(r.error||'Lista indisponível.');const anterior=selVendedor.value;vendedoresLink=r.vendedores;selVendedor.innerHTML='<option value="">Informar meu nome manualmente</option>'+r.vendedores.map(v=>'<option value="'+esc(v.id)+'">'+esc(v.nome)+'</option>').join('');selVendedor.value=r.vendedores.some(v=>v.id===anterior)?anterior:'';selVendedor.onchange();document.getElementById('pVendedores').hidden=false;estado.textContent=r.vendedores.length+' vendedores ativos · consulta '+fmt.dataHora(r.em);bVendedores.textContent='Consultar vendedores novamente';}catch(e){estado.textContent='Não foi possível carregar os vendedores: '+e.message;}finally{bVendedores.disabled=false;}};
+  selVendedor.onchange=()=>{const v=vendedoresLink.find(x=>x.id===selVendedor.value);if(v){nomeLink.value=v.nome;funcaoLink.value='Vendedor';}nomeLink.readOnly=!!v;funcaoLink.readOnly=!!v;};
   const itens = document.getElementById('pItens');
   const ligarLinha = (linha) => linha.querySelector('[data-tirar]').addEventListener('click', () => {
     if (itens.children.length > 1) linha.remove();
@@ -1196,6 +1169,7 @@ async function telaSolicitar() {
       unid: l.querySelector('[data-i=unid]').value,
       qtd: numeroBR(l.querySelector('[data-i=qtd]').value)
     })).filter((x) => x.descricao);
+    if(linhas.some(i=>!Number.isFinite(i.qtd)||i.qtd<=0)){erro.innerHTML='<div class="aviso ruim">Informe uma quantidade positiva para cada material.</div>';return;}
     if (!linhas.length) { erro.innerHTML = '<div class="aviso ruim">Escreva pelo menos um material.</div>'; return; }
 
     const obraSel = document.getElementById('pObra');
@@ -1207,7 +1181,7 @@ async function telaSolicitar() {
     const registro = {
       obraId: obraSel.value,
       obra: opcaoObra.text,
-      solicitante: { nome, telefone: tel, funcao: document.getElementById('pFuncao').value.trim() },
+      solicitante: { nome, telefone: tel, funcao: document.getElementById('pFuncao').value.trim(),vendedorMubiId:selVendedor.value||'' },
       setor: document.getElementById('pSetor').value,
       necessidadeEm: document.getElementById('pData').value,
       urgencia: (document.querySelector('input[name=urg]:checked') || {}).value || 'normal',
@@ -1216,6 +1190,7 @@ async function telaSolicitar() {
     };
     localStorage.setItem('compras_solicitante', JSON.stringify(registro.solicitante));
 
+    const enviar=document.getElementById('pEnviar');if(enviar.disabled)return;enviar.disabled=true;
     erro.innerHTML = '<div class="aviso info">Enviando…</div>';
     try {
       const r = await api('novaSolicitacao', { registro }, { publico: true });
@@ -1231,6 +1206,7 @@ async function telaSolicitar() {
           '</div>' +
         '</div>', 'Solicitação registrada');
     } catch (e) {
+      enviar.disabled=false;
       erro.innerHTML = '<div class="aviso ruim">' + esc(e.message === 'Failed to fetch' ? 'Sem internet. Tente de novo em instantes.' : e.message) + '</div>';
     }
   });

@@ -48,41 +48,27 @@ const linkCotacao = (c, f) =>
 /* ══════════════════════════════════════════════════════════════════════════
    LISTA
    ══════════════════════════════════════════════════════════════════════════ */
+const ETAPAS_COTACAO=[['andamento','Em andamento'],['aguardando','Aguardando respostas'],['respostas','Com respostas'],['aprovada','Aprovadas'],['cancelada','Canceladas'],['todas','Todas']];
+let filtroEtapaCotacao='andamento';
+function etapaCotacao(c){return c.situacao==='aprovada'?'aprovada':c.situacao==='cancelada'?'cancelada':(c.fornecedores||[]).some(respondeu)?'respostas':'aguardando';}
+function etiquetaEtapaCotacao(c){const e=etapaCotacao(c);return ['aprovada','cancelada'].includes(e)?etiqueta(c.situacao):'<span class="etiqueta">'+(e==='respostas'?'Com respostas':'Aguardando respostas')+'</span>';}
+function cotacaoNaEtapa(c,filtro){const e=etapaCotacao(c);return filtro==='todas'||filtro==='andamento'&&['aguardando','respostas'].includes(e)||e===filtro;}
+function valorResumoCotacao(c){const escolhida=(c.fornecedores||[]).find(f=>f.escolhido);if(c.situacao==='aprovada'&&escolhida)return {valor:totalCotacao(c,escolhida),legenda:'Escolhida · '+escolhida.nome};const completas=(c.fornecedores||[]).filter(f=>respondeu(f)&&propostaCompleta(c,f));return completas.length?{valor:Math.min(...completas.map(f=>totalCotacao(c,f))),legenda:'Menor proposta completa'}:{valor:null,legenda:(c.fornecedores||[]).some(respondeu)?'Respostas parciais':'Aguardando respostas'};}
 TELAS.cotacoes = function (el, args) {
   if (args[0]) return telaCotacao(el, args[0]);
-
-  const todas = cotacoes();
-  const abertas = todas.filter((c) => c.situacao === 'aberta');
-  cabecalho('Cotações', abertas.length + ' em aberto',
-    '<button class="btn primario" id="novaCot">+ Nova cotação</button>');
-
-  el.innerHTML =
-    '<div class="aviso info">Três preços antes de comprar é o que mais economiza dinheiro. ' +
-    'Aqui você manda o pedido de preço no WhatsApp e o fornecedor responde sozinho, sem você redigitar nada.</div>' +
-    '<div class="cartao">' +
-      (todas.length ?
-        '<div class="tabela-rolagem"><table><thead><tr><th>Nº</th><th>Itens</th><th>Destino</th>' +
-        '<th>Fornecedores</th><th class="num">Melhor preço</th><th>Situação</th></tr></thead><tbody>' +
-        todas.map((c) => {
-          const resp = (c.fornecedores || []).filter(respondeu);
-          const menor = resp.length ? Math.min(...resp.map((f) => totalCotacao(c, f))) : 0;
-          const venceu = (c.fornecedores || []).find((f) => f.escolhido);
-          return '<tr class="clicavel" data-id="' + esc(c.id) + '">' +
-            '<td><b>' + esc(c.codigo || '—') + '</b>' + (c._pendente ? ' <span class="pendente">enviando…</span>' : '') + '</td>' +
-            '<td>' + (c.itens || []).length + ' item(ns)' +
-              '<div style="font-size:.8rem;color:var(--texto-fraco)">' +
-              esc((c.itens || []).map((i) => i.descricao).join(', ').slice(0, 60)) + '</div></td>' +
-            '<td>' + esc(c.obra || nomeObra(c.obraId)) + '</td>' +
-            '<td>' + resp.length + ' de ' + (c.fornecedores || []).length + ' responderam</td>' +
-            '<td class="num">' + (menor ? fmt.brl(menor) : '—') +
-              (venceu ? '<div style="font-size:.8rem;color:var(--verde)">' + esc(venceu.nome) + '</div>' : '') + '</td>' +
-            '<td>' + etiqueta(c.situacao) + '</td></tr>';
-        }).join('') + '</tbody></table></div>'
-        : vazio('💵', 'Nenhuma cotação', 'Aprove uma solicitação e mande para cotação — ou crie uma direto aqui.')) +
-    '</div>';
-
-  el.querySelectorAll('tr[data-id]').forEach((tr) => tr.addEventListener('click', () => irPara('cotacoes/' + tr.dataset.id)));
-  document.getElementById('novaCot').addEventListener('click', () => abrirNovaCotacao(null));
+  const todas=cotacoes();
+  cabecalho('Cotações',todas.filter(c=>cotacaoNaEtapa(c,'andamento')).length+' em andamento · acompanhe por etapa','<button class="btn primario" id="novaCot">+ Nova cotação</button>');
+  el.innerHTML='<nav class="cot-etapas" aria-label="Etapas das cotações">'+ETAPAS_COTACAO.map(([v,t])=>'<button class="cot-chip" data-etapa-cot="'+v+'" aria-pressed="'+(filtroEtapaCotacao===v)+'"><span>'+t+'</span><b>'+todas.filter(c=>cotacaoNaEtapa(c,v)).length+'</b></button>').join('')+'</nav><div class="cot-busca">'+campo('Buscar nesta etapa','<input id="buscaCotacao" type="search" placeholder="Número, material, destino ou fornecedor…">')+'<p id="cotContagem" class="legenda" role="status" aria-live="polite"></p></div><div class="cartao" id="cotLista"></div>';
+  ligarRotulosRede(el);
+  const busca=el.querySelector('#buscaCotacao');
+  function desenhar(){
+    const q=chaveNome(busca.value),filtradas=todas.filter(c=>cotacaoNaEtapa(c,filtroEtapaCotacao)&&chaveNome([c.codigo,c.obra,...(c.itens||[]).map(i=>i.descricao),...(c.fornecedores||[]).map(f=>f.nome)].join(' ')).includes(q));
+    el.querySelectorAll('[data-etapa-cot]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.etapaCot===filtroEtapaCotacao)));
+    el.querySelector('#cotContagem').textContent=filtradas.length+' cotação(ões) · '+ETAPAS_COTACAO.find(e=>e[0]===filtroEtapaCotacao)[1];
+    el.querySelector('#cotLista').innerHTML=filtradas.length?'<div class="cot-linhas">'+filtradas.map(c=>{const resp=(c.fornecedores||[]).filter(respondeu),r=valorResumoCotacao(c);return '<article class="cot-linha"><div><a class="cot-codigo" href="#/cotacoes/'+esc(c.id)+'">'+esc(c.codigo||'Cotação sem número')+' →</a><div>'+etiquetaEtapaCotacao(c)+'</div>'+(c._pendente?'<small>Enviando…</small>':'')+'</div><div class="cot-descricao"><b>'+esc((c.itens||[]).map(i=>i.descricao).join('; '))+'</b><small>'+esc(c.obra||nomeObra(c.obraId)||'Destino não informado')+' · '+(c.itens||[]).length+' item(ns)</small></div><div class="cot-respostas"><b>'+resp.length+' de '+(c.fornecedores||[]).length+' responderam</b><small>'+(c.situacao==='aprovada'&&c.ocId?'<a href="#/compras/'+esc(c.ocId)+'">Abrir ordem de compra →</a>':c.situacao==='aberta'&&c.prazoResposta?'Resposta até '+fmt.data(c.prazoResposta):'')+'</small></div><div class="cot-preco"><strong>'+(r.valor==null?'—':fmt.brl(r.valor))+'</strong><small>'+esc(r.legenda)+'</small><a href="#/cotacoes/'+esc(c.id)+'" class="btn pequeno">Abrir cotação</a></div></article>';}).join('')+'</div>':vazio('💵',q?'Nenhuma cotação nessa busca':filtroEtapaCotacao==='andamento'?'Nenhuma cotação em andamento':'Nenhuma cotação nesta etapa',filtroEtapaCotacao==='andamento'?'As finalizadas ficam em Aprovadas ou Canceladas.':'Escolha outra etapa ou ajuste a busca.');
+  }
+  el.querySelectorAll('[data-etapa-cot]').forEach(b=>b.onclick=()=>{filtroEtapaCotacao=b.dataset.etapaCot;desenhar();});busca.oninput=desenhar;desenhar();
+  document.getElementById('novaCot').addEventListener('click',()=>abrirNovaCotacao(null));
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -90,8 +76,9 @@ TELAS.cotacoes = function (el, args) {
    ══════════════════════════════════════════════════════════════════════════ */
 // `convidados` são fornecedores já escolhidos (vêm da sugestão da solicitação):
 // a cotação nasce com eles dentro, com link pronto, sem convidar um por um.
+function itemSolicitacaoParaCotacao(i){return {id:i.id,descricao:i.descricao,unid:i.unid,qtd:i.qtd,materialId:i.materialId||''};}
 function abrirNovaCotacao(sc, convidados) {
-  const itensIniciais = sc ? (sc.itens || []).map((i) => ({ id: i.id, descricao: i.descricao, unid: i.unid, qtd: i.qtd })) : [{}, {}];
+  const itensIniciais = sc ? (sc.itens || []).map(itemSolicitacaoParaCotacao) : [{}, {}];
   const prazo = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
   const pre = (convidados || []).filter(Boolean);
 

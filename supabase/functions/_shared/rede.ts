@@ -12,6 +12,13 @@ export async function validarRede(col: string, novo: any, antigo: any, ler: Ler)
       // Identidade e unidade são estáveis: outro tamanho/unidade exige outro cadastro.
       exigir(!antigo || antigo.unidade===novo.unidade,'Crie outro material para uma unidade diferente.');
     }
+    if(col==='transp'){
+      if(novo.ufs!==undefined)exigir(Array.isArray(novo.ufs)&&novo.ufs.every((s:unknown)=>typeof s==='string'&&'AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO'.split(' ').includes(s)),'Estados de cobertura inválidos.');
+      if(novo.tiposCarga!==undefined)exigir(Array.isArray(novo.tiposCarga)&&novo.tiposCarga.length<=30&&novo.tiposCarga.every((s:unknown)=>typeof s==='string'&&s.length<=150),'Tipos de carga inválidos.');
+      exigir(novo.comprimentoMax==null||(typeof novo.comprimentoMax==='number'&&Number.isFinite(novo.comprimentoMax)&&novo.comprimentoMax>0),'Comprimento máximo inválido.');
+      if(novo.agendamento)exigir(['nao_informado','sim','nao'].includes(novo.agendamento),'Disponibilidade de agendamento inválida.');
+      if(novo.rastreamentoUrl){let u;try{u=new URL(novo.rastreamentoUrl);}catch{throw new ErroRede('Link de rastreamento inválido.');}exigir(['http:','https:'].includes(u.protocol)&&!u.username&&!u.password,'Use um link de rastreamento http ou https sem credenciais.');}
+    }
   }
   if(col==='oferta'){
     const [f,m]=await Promise.all([ler('forn',novo.fornecedorId),ler('mat',novo.materialId)]);
@@ -40,6 +47,9 @@ export async function validarRede(col: string, novo: any, antigo: any, ler: Ler)
       novo.fornecedorId=o.fornecedorId||'';
     }
     exigir(dataValida(novo.dataEntrega),'Informe uma data de entrega válida.');
+    if(novo.dataPrevista)exigir(dataValida(novo.dataPrevista),'Data prometida inválida.');
+    if(novo.ocorrencia)exigir(['nenhuma','avaria','falta','atraso','outro'].includes(novo.ocorrencia),'Ocorrência inválida.');
+    if(novo.ocorrenciaStatus)exigir(['aberta','resolvida'].includes(novo.ocorrenciaStatus),'Tratamento da ocorrência inválido.');
     exigir(texto(novo.conteudo),'Descreva o que foi entregue.');
   }
 }
