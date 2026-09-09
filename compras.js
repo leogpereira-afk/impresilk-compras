@@ -13,8 +13,16 @@ const cfgLista = (nome) => (S.cfg && Array.isArray(S.cfg[nome]) ? S.cfg[nome] : 
 const nomeObra = (id) => (obras().find((o) => o.id === id) || {}).nome || '';
 const unidades = () => (cfgLista('unidades').length ? S.cfg.unidades : ['un']);
 
+const ordemNomeFornecedor = new Intl.Collator('pt-BR', {
+  sensitivity: 'base', numeric: true, ignorePunctuation: true
+});
+function ordenarFornecedores(registros) {
+  return registros.slice().sort((a, b) =>
+    ordemNomeFornecedor.compare(String(a.nome || '').trim(), String(b.nome || '').trim()) ||
+    String(a.id || '').localeCompare(String(b.id || '')));
+}
 function fornecedoresAtivos() {
-  return lista('forn').sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || '')));
+  return ordenarFornecedores(lista('forn'));
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -2190,26 +2198,24 @@ TELAS.fornecedores = function (el, args) {
   const fs = fornecedoresAtivos();
   const eq = equipe();
 
-  cabecalho('Fornecedores',
-    fs.length + ' fornecedor(es) · ' + eq.length + ' pessoa(s) que pede(m) material',
+  cabecalho(_abaForn === 'mat' ? 'Fornecedores' : 'Equipe solicitante',
+    _abaForn === 'mat' ? 'Encontre quem fornece o material que você precisa.' : 'Contatos de quem pede material para a empresa.',
     _abaForn === 'mat'
-      ? (podeVer('config')
-          ? '<button class="btn" id="trazerMubi">⬇️ Trazer fornecedores do Mubisys</button>' +
-            '<button class="btn" id="trazerProdutos" title="' +
-              (catalogoProdutos().produtos.length
-                ? catalogoProdutos().produtos.length + ' item(ns) guardados · atualização: ' + fmt.dataHora(catalogoProdutos().em)
-                : 'Ainda não trouxe o catálogo') +
-            '">📦 Atualizar matérias-primas</button>'
-          : '') +
-        '<button class="btn primario" id="novoForn">+ Novo fornecedor</button>'
+      ? '<button class="btn primario" id="novoForn">+ Novo fornecedor</button>'
       : '<button class="btn primario" id="novaPessoa">+ Nova pessoa</button>');
 
-  el.innerHTML =
-    navRede('fornecedores') + '<div class="abas">' +
-      '<button class="aba' + (_abaForn === 'mat' ? ' ativa' : '') + '" data-abaf="mat">🏢 Fornecedores (' + fs.length + ')</button>' +
-      '<button class="aba' + (_abaForn === 'eq' ? ' ativa' : '') + '" data-abaf="eq">👤 Quem pede material (' + eq.length + ')</button>' +
+  const ferramentas = '<details class="forn-ferramentas"><summary class="btn">Ferramentas <span aria-hidden="true">⌄</span></summary><div>' +
+    (ehDirecao() ? '<button class="btn" id="trazerMubi">Importar fornecedores do Mubisys</button>' : '') +
+    '<button class="btn" id="trazerProdutos">Atualizar matérias-primas do Mubisys</button>' +
+    '</div></details>';
+  el.innerHTML = navRede('fornecedores') +
+    '<div class="forn-apoio">' +
+      (_abaForn === 'mat' ? '<span class="forn-ordem">A–Z <span>Ordem alfabética</span></span><div>' +
+        '<button class="btn" data-abaf="eq">Equipe solicitante (' + eq.length + ')</button>' + ferramentas + '</div>'
+        : '<button class="btn" data-abaf="mat">← Voltar aos fornecedores</button>') +
     '</div>' +
-    (_abaForn === 'mat' ? htmlDiretorioFornecedores(fs) + '<details class="cartao"><summary>Desempenho e contatos dos fornecedores</summary>' + htmlFornecedores(fs) + '</details>' : htmlEquipe(eq));
+    (_abaForn === 'mat' ? htmlDiretorioFornecedores(fs) +
+      (fs.length ? '<details class="cartao forn-desempenho"><summary>Desempenho e contatos · todos os fornecedores de A a Z</summary>' + htmlFornecedores(fs) + '</details>' : '') : htmlEquipe(eq));
   ligarBuscaRede(el);
 
   el.querySelectorAll('[data-abaf]').forEach((b) => b.addEventListener('click', () => {
@@ -2242,10 +2248,8 @@ TELAS.fornecedores = function (el, args) {
 };
 
 function htmlFornecedores(todos) {
-  // Melhor nota em cima: a lista vira a ordem de quem chamar primeiro.
-  const comNota = todos.map((f) => Object.assign({ f }, notaFornecedor(f)))
-    .sort((a, b) => Number(a.provisorio) - Number(b.provisorio) || (b.nota == null ? -1 : b.nota) - (a.nota == null ? -1 : a.nota) ||
-      String(a.f.nome || '').localeCompare(String(b.f.nome || '')));
+  // A nota informa o desempenho, sem mudar a posição alfabética do cadastro.
+  const comNota = ordenarFornecedores(todos).map((f) => Object.assign({ f }, notaFornecedor(f)));
   const bons = comNota.filter((x) => !x.provisorio && x.nota != null && x.nota >= 8.5).length;
   const ruins = comNota.filter((x) => !x.provisorio && x.nota != null && x.nota < 5).length;
 

@@ -1,5 +1,9 @@
 /* Rede de suprimentos: identidades explícitas, sem agrupar por semelhança. */
-function redeAtivos(col) { return lista(col).filter(x => x.ativo !== false).sort((a,b) => String(a.nome || a.nomeFornecedor || '').localeCompare(String(b.nome || b.nomeFornecedor || ''), 'pt-BR')); }
+function redeAtivos(col) {
+  const registros = lista(col).filter(x => x.ativo !== false);
+  if (col === 'forn') return ordenarFornecedores(registros);
+  return registros.sort((a,b) => String(a.nome || a.nomeFornecedor || '').localeCompare(String(b.nome || b.nomeFornecedor || ''), 'pt-BR'));
+}
 function navRede(ativo) {
   return '<nav class="rede-nav" aria-label="Rede de suprimentos">' + [['fornecedores','🏢','Fornecedores'],['transportadoras','🚚','Transportadoras'],['materiais','📦','Materiais padrão']].map(([r,i,t]) => '<a class="btn' + (r === ativo ? ' primario' : '') + '" href="#/' + r + '"' + (r === ativo ? ' aria-current="page"' : '') + '>' + i + ' ' + t + '</a>').join('') + '</nav>';
 }
@@ -61,5 +65,61 @@ TELAS.materiais=function(el,args){
   const ms=lista('mat').sort((a,b)=>String(a.nome).localeCompare(String(b.nome),'pt-BR'));
   el.innerHTML=navRede('materiais')+'<div class="rede-pesquisa">'+campo('Buscar material, especificação ou categoria','<input id="buscaRede" type="search" placeholder="Ex.: ACM, vinil, alumínio…">')+'</div><div class="rede-grid" id="redeCards">'+ms.map(x=>'<a class="cartao rede-card" data-rede-texto="'+esc([x.nome,x.especificacao,x.categoria].join(' ').toLowerCase())+'" href="#/materiais/'+esc(x.id)+'"><span class="rede-kicker">📦 '+esc(x.categoria||'Material')+'</span><h3>'+esc(x.nome)+'</h3><p>'+esc(x.especificacao||'Complete a especificação')+'</p><div class="rede-meta"><span>'+esc(x.unidade)+'</span><span>'+redeAtivos('oferta').filter(o=>o.materialId===x.id).length+' fornecedor(es)</span><span>'+(x.ativo===false?'Arquivado':'Ativo')+'</span></div></a>').join('')+'</div><p id="redeSemBusca" class="legenda" hidden>Nenhum material encontrado.</p>'+(!ms.length?vazio('📦','Crie seu primeiro material padrão','Os nomes antigos permanecem nas compras. Você escolhe quais produtos são equivalentes.'):'');document.getElementById('novoMat').onclick=()=>editarMaterial(null);ligarBuscaRede(el);
 };
-function ligarBuscaRede(el){const i=el.querySelector('#buscaRede');if(!i)return;i.oninput=()=>{const q=chaveNome(i.value);let n=0;el.querySelectorAll('[data-rede-texto]').forEach(c=>{c.hidden=!chaveNome(c.dataset.redeTexto).includes(q);if(!c.hidden)n++;});const msg=el.querySelector('#redeSemBusca');if(msg)msg.hidden=n>0;};}
-function htmlDiretorioFornecedores(fs){return '<div class="rede-pesquisa">'+campo('Buscar fornecedor ou produto','<input id="buscaRede" type="search" placeholder="O que você precisa comprar?">')+'</div><div class="rede-grid">'+fs.map(f=>{const os=ofertasFornecedor(f.id),cats=catalogosFornecedor(f.id),nomes=os.map(o=>(achar('mat',o.materialId)||{}).nome||o.nomeFornecedor);return '<a class="cartao rede-card" href="#/fornecedores/'+esc(f.id)+'" data-rede-texto="'+esc([f.nome,f.categorias,...nomes,...os.map(o=>o.nomeFornecedor+' '+o.codigo)].join(' '))+'"><span class="rede-kicker">🏢 Fornecedor</span><h3>'+esc(f.nome)+'</h3><p>'+esc(f.categorias||'O que fornece ainda não foi descrito.')+'</p>'+(nomes.length?'<p class="rede-produtos">'+esc(nomes.slice(0,4).join(' · '))+(nomes.length>4?' +'+(nomes.length-4):'')+'</p>':'')+'<div class="rede-meta"><span>📦 '+os.length+' materiais</span><span>📚 '+cats.length+' catálogos</span></div><span class="rede-ver">Consultar produtos e histórico →</span></a>';}).join('')+'</div><p id="redeSemBusca" class="legenda" hidden>Nenhum fornecedor encontrado para esta busca.</p>';}
+function ligarBuscaRede(el) {
+  const busca = el.querySelector('#buscaRede');
+  if (!busca) return;
+  const linhas = [...el.querySelectorAll('[data-rede-texto]')];
+  const limpar = el.querySelector('#limparBuscaForn');
+  const aplicar = () => {
+    const q = chaveNome(busca.value);
+    let encontrados = 0;
+    linhas.forEach(linha => {
+      linha.hidden = !chaveNome(linha.dataset.redeTexto).includes(q);
+      if (!linha.hidden) encontrados++;
+    });
+    const mensagem = el.querySelector('#redeSemBusca');
+    if (mensagem) mensagem.hidden = encontrados > 0 || !q;
+    const contagem = el.querySelector('#fornContagem');
+    if (contagem) contagem.textContent = encontrados + ' de ' + linhas.length + ' fornecedores';
+    if (limpar) limpar.hidden = !busca.value;
+  };
+  busca.oninput = aplicar;
+  if (limpar) limpar.onclick = () => { busca.value = ''; aplicar(); busca.focus(); };
+  aplicar();
+}
+
+function htmlDiretorioFornecedores(fs) {
+  const ordenados = ordenarFornecedores(fs);
+  return '<section class="forn-diretorio" aria-label="Diretório de fornecedores">' +
+    '<div class="forn-busca"><div><label for="buscaRede">Buscar fornecedor ou produto</label>' +
+      '<div class="forn-busca-campo"><input id="buscaRede" type="search" placeholder="Nome, material, nome comercial ou código…">' +
+        '<button class="btn pequeno" id="limparBuscaForn" hidden>Limpar busca</button></div></div>' +
+      '<span id="fornContagem" class="legenda" role="status" aria-live="polite">' + ordenados.length + ' fornecedores</span>' +
+    '</div>' +
+    (ordenados.length ? '<div class="forn-colunas" aria-hidden="true"><span>Fornecedor</span><span>O que fornece</span><span>Produtos e catálogos</span></div>' : '') +
+    '<div class="forn-lista">' + ordenados.map(f => {
+      const ofertas = ofertasFornecedor(f.id), catalogos = catalogosFornecedor(f.id);
+      const materiais = [...new Set(ofertas.map(o => (achar('mat',o.materialId) || {}).nome || o.nomeFornecedor))];
+      const contato = [f.contato, f.telefone ? fmt.telefone(f.telefone) : ''].filter(Boolean).join(' · ');
+      const inicial = Array.from(String(f.nome || '').trim())[0] || 'F';
+      const pesquisa = [f.nome, f.categorias, f.contato, f.cnpj, ...materiais,
+        ...ofertas.map(o => [o.nomeFornecedor, o.codigo].filter(Boolean).join(' '))].filter(Boolean).join(' ');
+      return '<a class="forn-linha" href="#/fornecedores/' + esc(f.id) + '" data-rede-texto="' + esc(pesquisa) + '">' +
+        '<div class="forn-identidade"><span class="forn-inicial" aria-hidden="true">' + esc(inicial.toLocaleUpperCase('pt-BR')) + '</span><div>' +
+          '<h3>' + esc(f.nome || 'Fornecedor sem nome') + '</h3>' +
+          (contato ? '<p>' + esc(contato) + '</p>' : '<p>Contato não informado</p>') +
+        '</div></div>' +
+        '<div class="forn-produtos"><span class="forn-rotulo">O que fornece</span>' +
+          '<p>' + esc(f.categorias || (materiais.length ? materiais.join(' · ') : 'Produtos ainda não descritos')) + '</p>' +
+          (f.categorias && materiais.length ? '<small>' + esc(materiais.slice(0,3).join(' · ')) + (materiais.length > 3 ? ' + ' + (materiais.length - 3) : '') + '</small>' : '') +
+        '</div>' +
+        '<div class="forn-acervo"><div>' +
+          '<span' + (!ofertas.length ? ' class="forn-pendente"' : '') + '>📦 ' + (ofertas.length ? ofertas.length + ' ' + (ofertas.length === 1 ? 'material' : 'materiais') : 'Sem material vinculado') + '</span>' +
+          '<span' + (!catalogos.length ? ' class="forn-pendente"' : '') + '>📚 ' + (catalogos.length ? catalogos.length + ' ' + (catalogos.length === 1 ? 'catálogo' : 'catálogos') : 'Sem catálogo') + '</span>' +
+        '</div><span class="forn-abrir">Abrir ficha <span aria-hidden="true">→</span></span></div>' +
+      '</a>';
+    }).join('') + '</div>' +
+    (!ordenados.length ? vazio('🏢','Cadastre seu primeiro fornecedor','Informe o que ele vende e vincule seus materiais e catálogos.') : '') +
+    '<div id="redeSemBusca" class="forn-sem-busca" hidden><b>Nenhum fornecedor encontrado.</b><p>Tente outro nome, material ou código de produto.</p></div>' +
+  '</section>';
+}
