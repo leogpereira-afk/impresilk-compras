@@ -80,7 +80,7 @@ function montarShell() {
   app.innerHTML =
     '<div class="app">' +
       '<aside class="lateral">' +
-        '<div class="marca"><img src="icons/logo-impresilk-branco.png" alt="Impresilk" width="156"><small>Compras e suprimentos</small></div>' +
+        '<div class="marca"><img src="icons/logo-impresilk.png" alt="Impresilk" width="190"><small>Compras e suprimentos</small></div>' +
         '<nav class="menu" id="menu"></nav>' +
         '<div class="rodape-lateral" id="rodapeLateral"></div>' +
       '</aside>' +
