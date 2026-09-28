@@ -1,7 +1,7 @@
 /* Service worker — deixa o app abrir sem internet (a obra costuma ter sinal ruim).
    Regra do kit: SUBIR o número do CACHE a cada publicação, senão o navegador
    continua servindo o arquivo velho. */
-const CACHE = 'compras-shell-v20';
+const CACHE = 'compras-shell-v21';
 const ARQUIVOS = [
   './icons/logo-impresilk.png', './icons/logo-impresilk-branco.png', './', './index.html', './styles.css', './config.js', './store.js', './ui.js',
   './pdf.js', './qualificacao.js', './compras.js', './acervo.js', './cotacao.js', './app.js', './inteligencia.js', './conferencia.js', './rede.js', './produtos.js', './transporte.js',
@@ -26,11 +26,6 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   // Nunca cachear a API: o dado tem que ser o do momento (offline é a fila do
   // store.js que resolve). O backend é o Supabase.
-  //
-  // A regra do Netlify saiu em 04/08/2026: os sites do Netlify foram apagados
-  // e este app passou a morar no GitHub Pages, então o caminho
-  // /.netlify/functions/ não existe mais em lugar nenhum. Linha morta em
-  // arquivo de cache confunde: dá a impressão de que ainda há um backend lá.
   if (url.hostname.endsWith('supabase.co')) return;
   if (e.request.method !== 'GET') return;
 
