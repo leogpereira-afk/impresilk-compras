@@ -77,8 +77,14 @@ function prioridadesOperacionais(){
     else if(!fs.length)add(0,c.codigo||'Cotação','Nenhum fornecedor convidado','cotacoes/'+c.id,2);
     else if(respostas.length)add(0,c.codigo||'Cotação','Respostas parciais · conferir itens sem preço','cotacoes/'+c.id,2);
   }
+  if(typeof itensPendentesCotacao === 'function')for(const c of lista('cot').filter(c=>c.situacao==='aprovada')){
+    const saldo=itensPendentesCotacao(c);
+    if(saldo.length && !cotacaoSaldoAberta(c))add(0,c.codigo||'Cotação',saldo.length+' item(ns) sem compra · cotar saldo','cotacoes/'+c.id,1);
+  }
   for(const s of lista('sc').filter(solicitacaoPendente)){
     const cotViva=(s.cotIds||[]).some(id=>{const c=achar('cot',id);return c&&!c.apagadoEm&&c.situacao==='aberta';}),ocViva=(s.ocIds||[]).some(id=>{const o=achar('oc',id);return o&&!o.apagadoEm&&o.situacao!=='cancelada';});
+    const saldoCompra = typeof itensPendentesSC === 'function' ? itensPendentesSC(s).length : 0;
+    if(s.situacao!=='nova' && !cotViva && saldoCompra && ['aprovada','em_compra'].includes(s.situacao)) { add(1,s.codigo||'Solicitação',saldoCompra+' item(ns) ainda precisam de compra · '+(s.solicitante?.nome||'equipe'),'solicitacoes/'+s.id,prioridadeSolicitacao(s)); continue; }
     if(s.situacao==='nova'||s.situacao==='aprovada'&&!cotViva&&!ocViva)add(1,s.codigo||'Solicitação',acaoSolicitacao(s)+' · '+(s.solicitante?.nome||'equipe')+(s.necessidadeEm?' · precisa até '+fmt.data(s.necessidadeEm):''),'solicitacoes/'+s.id,prioridadeSolicitacao(s));
   }
   for(const {oc:o,itens} of comprasAguardandoTransporte()){
@@ -93,6 +99,12 @@ function prioridadesOperacionais(){
   return grupos;
 }
 function htmlCentralDecisoes(){
-  const grupos=prioridadesOperacionais(),total=grupos.reduce((s,g)=>s+g.itens.length,0);
-  return '<section class="cartao central-decisoes"><div class="rede-titulo"><div><span class="rede-kicker">Próximas ações · todos os períodos</span><h2>'+total+' registro(s) para acompanhar</h2><p class="legenda">Abra o registro para resolver. Pendências de meses anteriores continuam aqui.</p></div></div><div class="central-grupos">'+grupos.filter(g=>g.itens.length).map(g=>'<div class="central-grupo"><h3>'+g.icone+' '+g.titulo+' <span>'+g.itens.length+'</span></h3>'+g.itens.slice(0,3).map(i=>'<a class="central-acao" href="#/'+esc(i.rota)+'"><div><b>'+esc(i.titulo)+'</b><small>'+esc(i.texto)+'</small></div><span aria-hidden="true">→</span></a>').join('')+(g.itens.length>3?'<details><summary>Ver mais '+(g.itens.length-3)+'</summary>'+g.itens.slice(3).map(i=>'<a class="central-acao" href="#/'+esc(i.rota)+'"><div><b>'+esc(i.titulo)+'</b><small>'+esc(i.texto)+'</small></div><span aria-hidden="true">→</span></a>').join('')+'</details>':'')+'</div>').join('')+'</div>'+(!total?'<p class="legenda">Nenhuma pendência identificada nos registros carregados.</p>':'')+'</section>';
+  const grupos=prioridadesOperacionais();
+  const mostrarGrupo=g=>'<div class="central-grupo"><h3>'+g.icone+' '+g.titulo+' <span>'+g.itens.length+'</span></h3>'+g.itens.slice(0,3).map(mostrarAcao).join('')+(g.itens.length>3?'<details><summary>Ver mais '+(g.itens.length-3)+'</summary>'+g.itens.slice(3).map(mostrarAcao).join('')+'</details>':'')+'</div>';
+  const mostrarAcao=i=>'<a class="central-acao" href="#/'+esc(i.rota)+'"><div><b>'+esc(i.titulo)+'</b><small>'+esc(i.texto)+'</small></div><span aria-hidden="true">→</span></a>';
+  const agora=grupos.map(g=>({...g,itens:g.id==='fretes'?g.itens.filter(i=>i.prioridade===0):g.itens})).filter(g=>g.itens.length);
+  const cadastro=grupos.filter(g=>g.id==='fretes').map(g=>({...g,itens:g.itens.filter(i=>i.prioridade!==0)})).filter(g=>g.itens.length);
+  const total=agora.reduce((n,g)=>n+g.itens.length,0),completar=cadastro.reduce((n,g)=>n+g.itens.length,0);
+  return '<section class="cartao central-decisoes"><div class="rede-titulo"><div><span class="rede-kicker">Próximas ações · todos os períodos</span><h2>Resolver hoje · '+total+' ação(ões)</h2><p class="legenda">Decisões, atrasos e próximas entregas. Cada ação abre o registro correspondente.</p></div></div><div class="central-grupos">'+agora.map(mostrarGrupo).join('')+'</div>'+(!total?'<p class="legenda">Nenhuma ação operacional identificada nos dados carregados.</p>':'')+
+    (completar?'<details class="central-conferencias"><summary>Completar dados e conferências · '+completar+' ação(ões)</summary><p class="legenda">Pendências de cadastro e frete, incluindo meses anteriores.</p><div class="central-grupos">'+cadastro.map(mostrarGrupo).join('')+'</div></details>':'')+'</section>';
 }

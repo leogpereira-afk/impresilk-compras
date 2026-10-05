@@ -12,8 +12,8 @@ const CINZA_CLARO = [234, 234, 234];
 let _logoCache = null;
 function carregarLogo() {
   if (_logoCache) return Promise.resolve(_logoCache);
-  return fetch('logo.png')
-    .then((r) => r.blob())
+  return fetch('icons/logo-impresilk.png')
+    .then((r) => {if(!r.ok)throw new Error('Logo indisponível');return r.blob();})
     .then((b) => new Promise((ok) => {
       const fr = new FileReader();
       fr.onload = () => { _logoCache = fr.result; ok(_logoCache); };
@@ -64,7 +64,7 @@ function novoDoc() {
 
 function cabecalhoPDF(doc, logo, cfg, titulo, codigo) {
   const emp = (cfg && cfg.empresa) || {};
-  if (logo) { try { doc.addImage(logo, 'PNG', M, 10, 38, 12.2); } catch { /* segue sem logo */ } }
+  if (logo) { try { const p=doc.getImageProperties(logo),k=Math.min(38/p.width,15/p.height);doc.addImage(logo, 'PNG', M, 9, p.width*k, p.height*k); } catch { /* segue sem logo */ } }
   doc.setTextColor(...CINZA);
   doc.setFontSize(7.5);
   doc.setFont('helvetica', 'normal');
@@ -85,8 +85,8 @@ function cabecalhoPDF(doc, logo, cfg, titulo, codigo) {
 }
 
 // Grade de campos rotulados (2, 3 ou 4 por linha).
-// O valor pode ocupar até DUAS linhas: endereço de fornecedor e local de
-// entrega são longos e antes saíam cortados no meio da palavra.
+// Valores longos continuam na página seguinte sem descartar endereço,
+// condição ou dados bancários.
 function blocoCampos(doc, y, campos, colunas = 3) {
   const larg = UTIL / colunas;
   const grupos = [];
@@ -97,9 +97,14 @@ function blocoCampos(doc, y, campos, colunas = 3) {
     doc.setFontSize(8.6);
     doc.setFont('helvetica', 'bold');
     const partes = grupo.map((c) =>
-      doc.splitTextToSize(String(c[1] == null || c[1] === '' ? '—' : c[1]), larg - 4).slice(0, 2));
-    const alturaLinha = 5.2 + Math.max(...partes.map((p) => p.length)) * 3.5;
-
+      doc.splitTextToSize(String(c[1] == null || c[1] === '' ? '—' : c[1]), larg - 4));
+    const totalLinhas=Math.max(...partes.map(p=>p.length));
+    let inicio=0;
+    while(inicio<totalLinhas){
+    if(yy>255){doc.addPage();yy=20;}
+    const linhasPagina=Math.max(1,Math.floor((267-yy-5.2)/3.5));
+    const fim=Math.min(totalLinhas,inicio+linhasPagina);
+    const alturaLinha=5.2+(fim-inicio)*3.5;
     grupo.forEach((c, col) => {
       const x = M + col * larg;
       doc.setFontSize(6.6);
@@ -109,16 +114,21 @@ function blocoCampos(doc, y, campos, colunas = 3) {
       doc.setFontSize(8.6);
       doc.setTextColor(20, 20, 20);
       doc.setFont('helvetica', 'bold');
-      doc.text(partes[col], x, yy + 4);
+      const trecho=partes[col].slice(inicio,fim);if(trecho.length)doc.text(trecho, x, yy + 4);
     });
     yy += alturaLinha + 1.4;
+    inicio=fim;
+    }
   }
   doc.setDrawColor(...CINZA_CLARO);
   doc.line(M, yy - 1.5, L - M, yy - 1.5);
   return yy + 3;
 }
 
-function tituloSecao(doc, y, texto) {
+function tituloSecao(doc, y, texto, aoQuebrar) {
+  // Reserva o título e o começo de seu conteúdo. Campos anteriores podem
+  // ocupar várias páginas, por isso o título não presume uma posição fixa.
+  if (y + 24 > 272) { doc.addPage(); y = aoQuebrar ? aoQuebrar(doc) : 20; }
   doc.setFillColor(245, 246, 249);
   doc.rect(M, y - 4.2, UTIL, 6, 'F');
   doc.setFont('helvetica', 'bold');
@@ -146,6 +156,7 @@ function tabela(doc, y, colunas, linhas, aoQuebrar) {
     return yy + 4.5;
   };
 
+  if (y + 12 > 272) { doc.addPage(); y = aoQuebrar ? aoQuebrar(doc) : 20; }
   y = desenharCabecalho(y);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
@@ -153,7 +164,8 @@ function tabela(doc, y, colunas, linhas, aoQuebrar) {
   linhas.forEach((linha, idx) => {
     // Altura da linha = maior célula quebrada
     const partes = colunas.map((c, i) => doc.splitTextToSize(String(linha[i] == null ? '' : linha[i]), c.largura - 3));
-    const alt = Math.max(...partes.map((p) => p.length)) * 3.6 + 2.6;
+    const totalLinhas = Math.max(...partes.map((p) => p.length));
+    const alt = totalLinhas * 3.6 + 2.6;
 
     if (y + alt > 272) {
       doc.addPage();
@@ -162,16 +174,32 @@ function tabela(doc, y, colunas, linhas, aoQuebrar) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
     }
-    if (idx % 2 === 1) { doc.setFillColor(249, 250, 252); doc.rect(M, y - 3.2, UTIL, alt, 'F'); }
-    let x = M + 1.5;
-    colunas.forEach((c, i) => {
-      const alinhaDir = c.alinha === 'right';
-      doc.text(partes[i], alinhaDir ? x + c.largura - 3 : x, y, { align: alinhaDir ? 'right' : 'left' });
-      x += c.largura;
-    });
-    doc.setDrawColor(...CINZA_CLARO);
-    doc.line(M, y + alt - 3.2, L - M, y + alt - 3.2);
-    y += alt;
+    let inicio = 0;
+    while (inicio < totalLinhas) {
+      let cabem = Math.floor((272 - y - 2.6) / 3.6);
+      if (cabem < 1) {
+        doc.addPage();
+        y = desenharCabecalho(aoQuebrar ? aoQuebrar(doc) : 20);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+        cabem = Math.max(1, Math.floor((272 - y - 2.6) / 3.6));
+      }
+      const fim = Math.min(totalLinhas, inicio + cabem);
+      const alturaTrecho = (fim - inicio) * 3.6 + 2.6;
+      if (idx % 2 === 1) { doc.setFillColor(249, 250, 252); doc.rect(M, y - 3.2, UTIL, alturaTrecho, 'F'); }
+      let x = M + 1.5;
+      colunas.forEach((c, i) => {
+        const alinhaDir = c.alinha === 'right';
+        const trecho = partes[i].slice(inicio, fim);
+        // Repete o número para identificar a continuação do mesmo material.
+        if (!trecho.length && i === 0 && inicio) trecho.push(partes[i][0] || '');
+        if (trecho.length) doc.text(trecho, alinhaDir ? x + c.largura - 3 : x, y, { align: alinhaDir ? 'right' : 'left' });
+        x += c.largura;
+      });
+      doc.setDrawColor(...CINZA_CLARO);
+      doc.line(M, y + alturaTrecho - 3.2, L - M, y + alturaTrecho - 3.2);
+      y += alturaTrecho;
+      inicio = fim;
+    }
   });
   return y + 2;
 }
@@ -224,10 +252,11 @@ async function pdfOC(o, cfg) {
   const f = o.fornecedor || {};
   const t = totaisOC(o);
   const emp = (cfg && cfg.empresa) || {};
+  const cabecalhoNovaPagina = d => cabecalhoPDF(d, logo, cfg, 'ORDEM DE COMPRA', o.codigo || '');
 
-  let y = cabecalhoPDF(doc, logo, cfg, 'ORDEM DE COMPRA', o.codigo || '');
+  let y = cabecalhoNovaPagina(doc);
 
-  y = tituloSecao(doc, y + 2, 'Fornecedor');
+  y = tituloSecao(doc, y + 2, 'Fornecedor', cabecalhoNovaPagina);
   y = blocoCampos(doc, y, [
     ['Fornecedor', f.nome], ['CNPJ', fmt.cnpj(f.cnpj)], ['Inscrição estadual', f.ie],
     ['Contato / representante', f.contato], ['Telefone', fmt.telefone(f.telefone)], ['E-mail', f.email],
@@ -237,7 +266,7 @@ async function pdfOC(o, cfg) {
     ...((o.os && o.os.numero) ? [['O.S. / trabalho', o.os.numero + (o.os.cliente ? ' — ' + o.os.cliente : '')]] : [])
   ], 3);
 
-  y = tituloSecao(doc, y + 2, 'Condições comerciais');
+  y = tituloSecao(doc, y + 2, 'Condições comerciais', cabecalhoNovaPagina);
   y = blocoCampos(doc, y, [
     ['Local de entrega', o.localEntrega], ['Prazo de entrega', o.prazoEntrega], ['Entrega prevista', o.entregaPrevista ? fmt.data(o.entregaPrevista) : ''],
     ['Modalidade', o.modalidade], ['Condição de pagamento', o.condicaoPagamento], ['Forma de pagamento', o.formaPagamento],
@@ -245,7 +274,7 @@ async function pdfOC(o, cfg) {
     ['Dados bancários', o.dadosBancarios]
   ], 3);
 
-  y = tituloSecao(doc, y + 2, 'Materiais');
+  y = tituloSecao(doc, y + 2, 'Materiais', cabecalhoNovaPagina);
   const colunas = [
     { titulo: '#', largura: 8 },
     { titulo: 'DESCRIÇÃO DO MATERIAL', largura: 70 },
@@ -259,7 +288,7 @@ async function pdfOC(o, cfg) {
     n + 1, i.descricao + (i.nomeFornecedor ? '\nNo fornecedor: ' + i.nomeFornecedor + (i.codigoFornecedor ? ' · cód. ' + i.codigoFornecedor : '') : ''), i.marca || '', i.unid || '',
     fmt.numero(i.qtd), fmt.brl(i.preco), fmt.brl((Number(i.qtd) || 0) * (Number(i.preco) || 0))
   ]);
-  y = tabela(doc, y, colunas, linhas, (d) => cabecalhoPDF(d, logo, cfg, 'ORDEM DE COMPRA', o.codigo || ''));
+  y = tabela(doc, y, colunas, linhas, cabecalhoNovaPagina);
 
   // Totais
   if (y > 240) { doc.addPage(); y = cabecalhoPDF(doc, logo, cfg, 'ORDEM DE COMPRA', o.codigo || ''); }
@@ -294,25 +323,27 @@ async function pdfOC(o, cfg) {
   y += 12;
 
   if (o.observacoes) {
-    y = tituloSecao(doc, y, 'Observações / condições gerais');
+    y = tituloSecao(doc, y, 'Observações / condições gerais', cabecalhoNovaPagina);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     const linhasObs = doc.splitTextToSize(String(o.observacoes), UTIL - 4);
-    doc.text(linhasObs, M + 2, y);
-    y += linhasObs.length * 3.8 + 4;
+    for(const linha of linhasObs){
+      if(y>263){doc.addPage();y=cabecalhoPDF(doc,logo,cfg,'ORDEM DE COMPRA',o.codigo||'');doc.setFont('helvetica','normal');doc.setFontSize(8);}
+      doc.text(linha,M+2,y);y+=3.8;
+    }
+    y+=4;
   }
 
   const clausulas = (cfg && cfg.clausulasOC) || [];
   if (clausulas.length) {
     if (y > 225) { doc.addPage(); y = cabecalhoPDF(doc, logo, cfg, 'ORDEM DE COMPRA', o.codigo || ''); }
-    y = tituloSecao(doc, y, 'Cláusulas e condições contratuais');
+    y = tituloSecao(doc, y, 'Cláusulas e condições contratuais', cabecalhoNovaPagina);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.2);
     clausulas.forEach((c, i) => {
       const linhasC = doc.splitTextToSize((i + 1) + '. ' + c, UTIL - 4);
-      if (y + linhasC.length * 3.2 > 262) { doc.addPage(); y = 22; }
-      doc.text(linhasC, M + 2, y);
-      y += linhasC.length * 3.2 + 1.4;
+      for(const linha of linhasC){if(y>262){doc.addPage();y=22;}doc.text(linha,M+2,y);y+=3.2;}
+      y+=1.4;
     });
     y += 4;
   }

@@ -1,0 +1,12 @@
+{
+  "name": "impresilk-compras",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:ui": "node tests/experiencia-ui.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "25.0.1"
+  }
+}

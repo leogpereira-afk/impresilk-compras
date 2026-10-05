@@ -76,14 +76,55 @@ TELAS.cotacoes = function (el, args) {
    ══════════════════════════════════════════════════════════════════════════ */
 // `convidados` são fornecedores já escolhidos (vêm da sugestão da solicitação):
 // a cotação nasce com eles dentro, com link pronto, sem convidar um por um.
-function itemSolicitacaoParaCotacao(i){return {id:i.id,descricao:i.descricao,unid:i.unid,qtd:i.qtd,materialId:i.materialId||''};}
-function abrirNovaCotacao(sc, convidados) {
-  const itensIniciais = sc ? (sc.itens || []).map(itemSolicitacaoParaCotacao) : [{}, {}];
+// Saldo de uma cotação considera também as compras de suas cotações-filhas.
+// O ID do item é preservado; descrições parecidas nunca são agrupadas.
+function idsFamiliaCotacao(c) {
+  const ids = new Set([String(c.id)]);
+  let mudou = true;
+  while (mudou) {
+    mudou = false;
+    for (const filha of lista('cot')) if (ids.has(String(filha.cotacaoOrigemId || '')) && !ids.has(String(filha.id))) { ids.add(String(filha.id)); mudou = true; }
+  }
+  return ids;
+}
+function itensPendentesCotacao(c) {
+  const familia = idsFamiliaCotacao(c);
+  const ordens = lista('oc').filter(o => !o.apagadoEm && o.situacao !== 'cancelada' && familia.has(String(o.cotacaoId || '')));
+  return (c.itens || []).map(i => {
+    let comprado = 0;
+    for (const o of ordens) for (const x of (o.itens || [])) if (i.id != null && String(x.id) === String(i.id) && unidadesCompativeisSaldo(x.unid, i.unid)) comprado += o.situacao === 'entregue' ? jaRecebido(o, x.id) : Math.max(0, Number(x.qtd) || 0);
+    let qtd = Math.max(0, (Number(i.qtd) || 0) - comprado);
+    const sid = i.origemScId || ((c.scIds || []).length === 1 ? c.scIds[0] : '');
+    const sc = sid && achar('sc', sid);
+    const saldoSc = sc && saldoScPorItem(sc).find(s => String(s.item.id) === String(i.origemScItemId || i.id));
+    if (saldoSc && unidadesCompativeisSaldo(saldoSc.item.unid, i.unid)) qtd = Math.min(qtd, saldoSc.faltaComprar);
+    return {...i, qtd};
+  }).filter(i => i.qtd > 0.001);
+}
+function cotacaoSaldoAberta(c) {
+  const familia = idsFamiliaCotacao(c);
+  return lista('cot').find(x => String(x.id) !== String(c.id) && familia.has(String(x.id)) && !x.apagadoEm && x.situacao === 'aberta');
+}
+const formulariosSaldoCotacao = new Set();
+
+function itemSolicitacaoParaCotacao(i){return {id:i.id,descricao:i.descricao,unid:i.unid,qtd:i.qtd,materialId:i.materialId||'',origemScId:i.origemScId||'',origemScItemId:i.origemScItemId||''};}
+function abrirNovaCotacao(sc, convidados, opcoes = {}) {
+  const origem = opcoes.cotacaoOrigem ? (achar('cot', opcoes.cotacaoOrigem.id) || opcoes.cotacaoOrigem) : null;
+  if (origem) {
+    const existente = cotacaoSaldoAberta(origem);
+    if (existente) { toast('Já existe uma cotação aberta para este saldo.'); irPara('cotacoes/' + existente.id); return; }
+    if (formulariosSaldoCotacao.has(origem.id)) { toast('O formulário deste saldo já está aberto.'); return; }
+  }
+  const itensIniciais = origem ? itensPendentesCotacao(origem).map(itemSolicitacaoParaCotacao) : sc ? itensPendentesSC(sc).map(itemSolicitacaoParaCotacao) : [{}];
+  if (origem && !itensIniciais.length) { toast('O saldo desta cotação já está comprado. Atualize para acompanhar a entrega.'); return; }
+  if (origem) formulariosSaldoCotacao.add(origem.id);
+  if(sc && !itensIniciais.length){toast('Todos os itens desta solicitação já estão em compras ativas. Confira as ordens vinculadas antes de cotar novamente.','ruim');return;}
   const prazo = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
   const pre = (convidados || []).filter(Boolean);
 
   abrirModal({
-    titulo: sc ? 'Pedir cotação — ' + (sc.codigo || '') : 'Nova cotação',
+    titulo: origem ? 'Cotar saldo — ' + (origem.codigo || '') : sc ? 'Pedir cotação — ' + (sc.codigo || '') : 'Nova cotação',
+    aoFechar: () => { if (origem) formulariosSaldoCotacao.delete(origem.id); },
     largo: true,
     corpo: '<div id="fCot">' +
       (pre.length
@@ -94,23 +135,32 @@ function abrirNovaCotacao(sc, convidados) {
               'depois é só copiar o link e mandar por onde der.</span>' : '') + '</div>'
         : '') +
       '<div class="linha">' +
-        campo('Destino', seletor('obraId', (sc && sc.obraId) || (obras()[0] || {}).id, obras().map((o) => ({ v: o.id, t: o.nome })))) +
+        campo('Destino', seletor('obraId', (origem && origem.obraId) || (sc && sc.obraId) || (obras()[0] || {}).id, obras().map((o) => ({ v: o.id, t: o.nome })))) +
         campo('Responder até', entrada('prazoResposta', prazo, { tipo: 'date' })) +
       '</div>' +
       '<h3>O que vai ser cotado</h3>' +
       '<div id="itensCot">' + itensIniciais.map((i) => linhaItem(i, false)).join('') + '</div>' +
-      '<button class="btn pequeno" id="maisItemCot">+ Item</button>' +
+      '<button class="btn pequeno" id="maisItemCot"' + (origem ? ' hidden' : '') + '>+ Item</button>' +
       campo('Observação para o fornecedor', areaTexto('observacoes', '',
         'Ex.: entrega na fábrica, informe prazo e condição de pagamento')) +
     '</div>',
     acoes: [
       { texto: 'Voltar', aoClicar: () => fecharModal() },
       { texto: 'Criar cotação', classe: 'primario', aoClicar: (fundo) => {
-        const itens = lerItens(fundo.querySelector('#itensCot'), false);
+        if (fundo.dataset.salvando === '1') return;
+        const itens = lerItens(fundo.querySelector('#itensCot'), false).map(i=>sc?{...i,origemScId:sc.id,origemScItemId:i.origemScItemId||i.id}:i);
         if (!itens.length) { toast('Escreva pelo menos um item', 'ruim'); return; }
+        if (itens.some(i => !Number.isFinite(i.qtd) || i.qtd <= 0)) { toast('Informe quantidade maior que zero em cada item.', 'ruim'); return; }
+        if (origem) {
+          const atual = achar('cot', origem.id) || origem, aberta = cotacaoSaldoAberta(atual);
+          if (aberta && aberta.id !== fundo.dataset.cotacaoId) { toast('Outra cotação deste saldo já foi criada. Abra ' + (aberta.codigo || 'a cotação existente') + '.', 'ruim'); return; }
+          const saldo = itensPendentesCotacao(atual);
+          if (itens.some(i => !saldo.some(s => String(s.id) === String(i.id) && i.qtd <= s.qtd + 0.001))) { toast('O saldo mudou ou contém item fora desta cotação. Reabra Cotar saldo para conferir as quantidades.', 'ruim'); return; }
+        }
         const d = lerCampos(fundo.querySelector('#fCot'));
         const reg = {
-          obraId: d.obraId, obra: nomeObra(d.obraId), itens,
+          id: fundo.dataset.cotacaoId || undefined, cotacaoOrigemId: origem?.id || '',
+          obraId: d.obraId, obra: nomeObra(d.obraId), itens, os:sc?.os||origem?.os||null,
           prazoResposta: d.prazoResposta, observacoes: d.observacoes,
           // O token de cada convite é gerado no servidor ao salvar — um por
           // fornecedor, para nenhum deles ver o preço do outro.
@@ -120,15 +170,19 @@ function abrirNovaCotacao(sc, convidados) {
             itensFornecedor: nomesParaFornecedor(f.id, itens),
             precos: {}, convidadoEm: new Date().toISOString()
           })),
-          situacao: 'aberta', scIds: sc ? [sc.id] : []
+          situacao: 'aberta', scIds: sc ? [sc.id] : (origem?.scIds || [])
         };
-        reg.historico = historiar(reg, 'Cotação aberta' + (sc ? ' a partir da ' + (sc.codigo || 'solicitação') : '') +
+        reg.historico = historiar(reg, 'Cotação aberta' + (origem ? ' para o saldo da ' + (origem.codigo || 'cotação anterior') : sc ? ' a partir da ' + (sc.codigo || 'solicitação') : '') +
           (pre.length ? ' — convidados: ' + pre.map((f) => f.nome).join(', ') : ''));
+        fundo.dataset.salvando = '1';
+        try {
         const salvo = salvar('cot', reg);
+        fundo.dataset.cotacaoId = salvo.id;
 
-        if (sc) {
+        const solicitacoesLigadas = sc ? [sc] : (origem?.scIds || []).map(id => achar('sc', id)).filter(Boolean);
+        for (const sc of solicitacoesLigadas) {
           const ns = Object.assign({}, sc, {
-            situacao: 'em_cotacao',
+            situacao: sc.situacao === 'em_compra' ? 'em_compra' : 'em_cotacao',
             cotIds: Array.from(new Set([...(sc.cotIds || []), salvo.id]))
           });
           if (sc.situacao === 'nova') ns.historico = historiar(sc, 'Aprovada ao mandar para cotação');
@@ -139,7 +193,9 @@ function abrirNovaCotacao(sc, convidados) {
         irPara('cotacoes/' + salvo.id);
         toast(pre.length
           ? pre.length + ' fornecedor(es) convidados — agora mande o link no WhatsApp'
-          : 'Cotação criada — agora convide os fornecedores', 'bom');
+          : 'Cotação guardada — agora convide os fornecedores após sincronizar.', 'bom');
+        } catch (e) { toast(e.message || 'Não foi possível guardar; formulário preservado.', 'ruim'); }
+        finally { fundo.dataset.salvando = ''; }
       } }
     ]
   });
@@ -165,6 +221,8 @@ function telaCotacao(el, id) {
   const econ = economia(c);
   const pronta = !!c.codigo;
   const aberta = c.situacao === 'aberta';
+  const saldo = c.situacao === 'aprovada' ? itensPendentesCotacao(c) : [];
+  const cotSaldo = saldo.length ? cotacaoSaldoAberta(c) : null;
 
   cabecalho(c.codigo || 'Cotação (sincronizando…)',
     (c.itens || []).length + ' item(ns) · ' + respondidos.length + ' de ' + fs.length + ' responderam',
@@ -193,6 +251,7 @@ function telaCotacao(el, id) {
   }).join('');
 
   el.innerHTML =
+    (saldo.length ? '<section class="cartao"><h3>Itens que ainda faltam comprar</h3><p>' + esc(saldo.map(i => fmt.numero(i.qtd) + ' ' + (i.unid || '') + ' ' + i.descricao).join('; ')) + '</p>' + (cotSaldo ? '<a class="btn primario" href="#/cotacoes/' + esc(cotSaldo.id) + '">Abrir cotação do saldo</a>' : '<button class="btn primario" id="cotarSaldo">Cotar saldo</button>') + '</section>' : '') +
     htmlApoioCotacao(c) +
     (econ > 0
       ? '<div class="aviso bom">Entre a maior e a menor proposta há <b>' + fmt.brl(econ) + '</b> de diferença.</div>'
@@ -271,6 +330,8 @@ function telaCotacao(el, id) {
       (aberta ? '<div class="cartao"><button class="btn perigo" id="cancelarCot" style="width:100%">Cancelar cotação</button></div>' : '') +
     '</div></div>';
 
+  const botaoSaldo = document.getElementById('cotarSaldo');
+  if (botaoSaldo) botaoSaldo.onclick = () => abrirNovaCotacao(null, [], { cotacaoOrigem: c });
   const bc = document.getElementById('convidar');
   if (bc) bc.addEventListener('click', () => convidarFornecedor(c));
 
@@ -433,8 +494,8 @@ async function escolherFornecedor(c, fid) {
   if (faltando.length) {
     const nomes = faltando.map((i) => i.descricao).join(', ');
     if (!await confirmar('Esta proposta não tem preço para: ' + nomes + '. ' +
-      'A ordem de compra vai sair com esses itens ZERADOS e você precisa comprá-los à parte. Continuar?',
-      { perigo: true, ok: 'Continuar assim mesmo' })) return;
+      'A ordem terá apenas os '+itensCotados(atual,f).length+' item(ns) com preço. Os demais continuam pendentes para outra compra. Continuar?',
+      { perigo: true, ok: 'Criar compra parcial' })) return;
   }
 
   const motivo = await perguntar(
@@ -454,14 +515,17 @@ async function escolherFornecedor(c, fid) {
     Object.assign({}, x, { escolhido: x.id === fid, motivo: x.id === fid ? motivo : x.motivo }));
 
   // 2. gera a ordem de compra já preenchida com os preços que ele mandou
+  const cadastro = achar('forn', f.fornecedorId) || {};
   const oc = salvar('oc', {
-    obraId: atual.obraId, obra: atual.obra,
+    id:'cot-' + atual.id,
+    obraId: atual.obraId, obra: atual.obra, os:atual.os||null,
     fornecedorId: f.fornecedorId || '',
-    fornecedor: { nome: f.nome, telefone: f.telefone, contato: f.contato, email: f.email || '', cnpj: f.cnpj || '' },
+    fornecedor: {nome:cadastro.nome||f.nome, telefone:f.telefone||cadastro.telefone||'', contato:f.contato||cadastro.contato||'', email:f.email||cadastro.email||'', cnpj:cadastro.cnpj||f.cnpj||'', ie:cadastro.ie||'', endereco:cadastro.endereco||'', origemMubi:cadastro.origemMubi||''},
+    dadosBancarios:cadastro.banco||'',
     // Item sem preço fica FORA da ordem: entrava com R$ 0,00 e o PDF ia para o
     // WhatsApp do fornecedor cobrando material de graça.
     itens: itensCotados(atual, f).map((i) => ({
-      id: i.id, materialId: i.materialId, nomeFornecedor: ((f.itensFornecedor || {})[i.id] || {}).nome || '', codigoFornecedor: ((f.itensFornecedor || {})[i.id] || {}).codigo || '', descricao: i.descricao, unid: i.unid, qtd: i.qtd,
+      id: i.id, origemScId:i.origemScId||((atual.scIds||[]).length===1?atual.scIds[0]:''), origemScItemId:i.origemScItemId||i.id, materialId: i.materialId, nomeFornecedor: ((f.itensFornecedor || {})[i.id] || {}).nome || '', codigoFornecedor: ((f.itensFornecedor || {})[i.id] || {}).codigo || '', descricao: i.descricao, unid: i.unid, qtd: i.qtd,
       preco: Number((f.precos || {})[i.id]) || 0
     })),
     frete: Number(f.frete) || 0,
@@ -481,7 +545,7 @@ async function escolherFornecedor(c, fid) {
   }));
 
   // 3. fecha a cotação e liga tudo
-  const n = Object.assign({}, atual, { fornecedores, situacao: 'aprovada', ocId: oc.id });
+  const n = Object.assign({}, atual, { fornecedores, situacao: 'aprovada', ocId: oc.id, itensPendentes:faltando.map(i=>i.id) });
   n.historico = historiar(atual, 'Escolhido ' + f.nome + ' por ' + fmt.brl(t) + ': ' + motivo);
   salvar('cot', n);
 

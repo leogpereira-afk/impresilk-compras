@@ -30,7 +30,7 @@ const SISTEMA = "compras";
 // Cliente de servico so para a pergunta da revogacao (uma consulta por pessoa
 // por minuto). Este arquivo continua sem tocar em dado do Compras.
 const sb = createClient(
-  Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  Deno.env.get("SUPABASE_URL")!, (Deno.env.get("SB_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))!,
   { auth: { persistSession: false } },
 );
 
@@ -74,27 +74,28 @@ async function chaveHmac(segredo: string) {
 }
 
 const CACHE_REVOG = new Map<string, { ate: number; revogado: boolean }>();
-async function crachaRevogado(sub: string, papel: string): Promise<boolean> {
+async function crachaRevogado(sub: string, papel: string, escrita = false): Promise<boolean> {
   if (!sub) return false;
   const chave = `${papel}:${sub}`;
   const agora = Date.now();
   const emCache = CACHE_REVOG.get(chave);
-  if (emCache && emCache.ate > agora) return emCache.revogado;
+  if (!escrita && emCache && emCache.ate > agora) return emCache.revogado;
   try {
     const { data, error } = await sb.rpc("acesso_revogado", {
       p_sistema: SISTEMA, p_sub: sub, p_papel: papel,
     });
     if (error) throw new Error(error.message);
-    const revogado = data === true;
+    if (typeof data !== "boolean") throw new Error("Resposta de acesso inválida");
+    const revogado = data;
     CACHE_REVOG.set(chave, { ate: agora + 60_000, revogado });
     return revogado;
   } catch (e) {
     console.error("[revogacao] indisponivel:", (e as Error)?.message);
-    return false;
+    return true; // indisponibilidade nunca autoriza gravação ou leitura privada
   }
 }
 
-export async function identificarPorCracha(req: Request): Promise<Quem | null> {
+export async function identificarPorCracha(req: Request, escrita = false): Promise<Quem | null> {
   if (!JWT_SECRET) return null; // sem segredo configurado, ninguém entra — fail closed
   const m = (req.headers.get("authorization") || "").match(/^Bearer\s+(.+)$/i);
   if (!m) return null;
@@ -113,8 +114,9 @@ export async function identificarPorCracha(req: Request): Promise<Quem | null> {
        efeito quando ele vencia. A regra mora no BANCO (public.acesso_revogado),
        a mesma que as portas dos outros sete consultam: as functions estao em
        cinco repositorios e um arquivo compartilhado viraria doze copias
-       envelhecendo caladas. Cache de 60s; banco fora do ar ACEITA. */
-    if (await crachaRevogado(String(corpo.sub), String(corpo.papel ?? ""))) return null;
+       envelhecendo caladas. Leitura usa cache de 60s; gravação sempre confirma
+       no banco. Falha na consulta recusa o acesso. */
+    if (await crachaRevogado(String(corpo.sub), String(corpo.papel ?? ""), escrita)) return null;
     return { id: String(corpo.sub), nome: String(corpo.nome || corpo.sub), cargo: "", perfil, proprio: true };
   } catch { return null; }
 }
@@ -136,7 +138,8 @@ export const perfilDe = (quem: Quem | null) => (quem && PERFIS[quem.perfil]) ? q
 
 // Os campos que a leitura esconde de quem não pode ver preço.
 const CAMPOS_VALOR = ["preco", "total", "totalLiquido", "totalBruto", "desconto", "frete",
-  "valor", "liquido", "bruto", "retencao", "adiantamento", "condicaoPagamento", "banco"];
+  "valor", "liquido", "bruto", "retencao", "adiantamento", "condicaoPagamento", "banco",
+  "dadosBancarios", "tokenPublico", "token"];
 
 /* ── O que o solicitante pode mexer em cada coleção ─────────────────────────
    Esconder a tela no menu não protege nada: a porta é o servidor. */
@@ -203,7 +206,24 @@ export function motivoRecusa(quem: Quem | null, colecao: string, registro: any, 
     return "";
   }
 
-  if (!atual) return "";
+  if (!atual) return "solicitante não cria ordem de compra";
+  if (colecao === "oc") {
+    if (registro.situacao && registro.situacao !== atual.situacao &&
+        !["parcial", "entregue"].includes(registro.situacao)) return "solicitante só registra recebimentos";
+    if (["rascunho", "cancelada"].includes(atual.situacao) &&
+        !igual(registro.recebimentos ?? atual.recebimentos, atual.recebimentos)) return "solicitante não recebe uma ordem em rascunho ou cancelada";
+    // A foto pendente pode ser anexada depois; as quantidades e a autoria de
+    // um recebimento existente são imutáveis para quem apenas recebe.
+    for (const r of (registro.recebimentos || [])) {
+      const a = (atual.recebimentos || []).find((x: any) => x.id === r.id);
+      if (!a) continue;
+      for (const k of Object.keys(r)) {
+        if (["fotos", "fotosPendentes"].includes(k)) continue;
+        if (!igual(r[k], a[k])) return "solicitante não altera recebimento já registrado";
+      }
+      if ((a.fotos || []).some((f: string) => !(r.fotos || []).includes(f))) return "solicitante não remove fotos do recebimento";
+    }
+  }
 
   const permitidos = CAMPOS_OBRA[colecao] || [];
   for (const k of Object.keys(registro)) {

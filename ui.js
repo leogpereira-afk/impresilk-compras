@@ -194,18 +194,52 @@ const etiquetaUrgencia = (u) => {
 
 /* ── Avisos rápidos ────────────────────────────────────────────────────────── */
 function toast(msg, tipo = '') {
-  let caixa = document.getElementById('toasts');
+  const modal = typeof _modalAberto !== 'undefined' && _modalAberto;
+  let caixa = modal ? modal.fundo.querySelector('.toasts-modal') : document.getElementById('toasts');
   if (!caixa) {
     caixa = document.createElement('div');
-    caixa.id = 'toasts';
-    document.body.appendChild(caixa);
+    if (modal) {
+      caixa.className = 'toasts-modal';
+      modal.fundo.querySelector('.modal').appendChild(caixa);
+    } else {
+      caixa.id = 'toasts';
+      document.body.appendChild(caixa);
+    }
   }
+  caixa.setAttribute('role', 'region');
+  caixa.setAttribute('aria-label', 'Notificações');
+  const mensagem = String(msg == null ? '' : msg);
+  // Falhas repetidas de sincronização não empilham o mesmo aviso indefinidamente.
+  if (Array.from(caixa.children).some(t => t.dataset.mensagem === mensagem && t.dataset.tipo === tipo)) return;
   const t = document.createElement('div');
   t.className = 'toast ' + tipo;
-  t.textContent = msg;
+  t.dataset.mensagem = mensagem;
+  t.dataset.tipo = tipo;
+  const texto = document.createElement('span');
+  texto.setAttribute('role', tipo === 'ruim' ? 'alert' : 'status');
+  texto.setAttribute('aria-atomic', 'true');
+  t.appendChild(texto);
+  const fechar = document.createElement('button');
+  fechar.type = 'button';
+  fechar.className = 'toast-fechar';
+  fechar.setAttribute('aria-label', 'Dispensar notificação');
+  fechar.textContent = '×';
+  fechar.addEventListener('click', () => {
+    const tinhaFoco = t.contains(document.activeElement);
+    t.remove();
+    if (tinhaFoco) {
+      if (_modalAberto) focarModal(_modalAberto);
+      else focarElementoUI(document.getElementById('tituloTela'));
+    }
+  });
+  t.appendChild(fechar);
   caixa.appendChild(t);
-  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; }, 3200);
-  setTimeout(() => t.remove(), 3600);
+  texto.textContent = mensagem;
+  if (modal && tipo === 'ruim') t.scrollIntoView?.({ block: 'nearest' });
+  // Erros e alertas que exigem leitura ficam até a pessoa dispensar.
+  if (tipo !== 'ruim' && tipo !== 'atencao') setTimeout(() => {
+    if (!t.contains(document.activeElement) && !t.matches(':hover')) t.remove();
+  }, 6000);
 }
 
 /* ── Modal ─────────────────────────────────────────────────────────────────── */
@@ -215,19 +249,68 @@ function toast(msg, tipo = '') {
 // apagava o recebimento inteiro (fotos já enviadas inclusive).
 let _modalAberto = null;
 const _pilhaModais = [];
+let _sequenciaModal = 0;
+let _focoBaseModal = null;
+const _fundosInertes = new Map();
+
+function elementoVisivelUI(el) {
+  return !!(el && el.isConnected && !el.disabled && !el.closest('[hidden], [inert]') &&
+    el.getClientRects().length && window.getComputedStyle(el).visibility !== 'hidden');
+}
+
+function focarElementoUI(el) {
+  if (!elementoVisivelUI(el)) return false;
+  if (!el.matches('a[href],button,input,select,textarea,summary,[tabindex]')) el.setAttribute('tabindex', '-1');
+  el.focus({ preventScroll: true });
+  return document.activeElement === el;
+}
+
+function focaveisModal(fundo) {
+  return Array.from(fundo.querySelectorAll('a[href],button,input:not([type="hidden"]),select,textarea,summary,[tabindex]'))
+    .filter(el => el.tabIndex >= 0 && elementoVisivelUI(el));
+}
+
+function focarModal(modal, preferido) {
+  if (preferido && modal.fundo.contains(preferido) && focarElementoUI(preferido)) return;
+  focarElementoUI(modal.fundo.querySelector('[data-titulo-modal]'));
+}
+
+function sincronizarMenuAcessivel() {
+  const lateral = document.querySelector('.lateral'), botao = document.getElementById('btnMenu');
+  if (!lateral || !botao) return;
+  const pequeno = window.matchMedia('(max-width: 900px)').matches;
+  const aberto = !pequeno || document.body.classList.contains('menu-aberto');
+  lateral.id = lateral.id || 'lateralMenu';
+  lateral.inert = !aberto;
+  if (aberto) lateral.removeAttribute('aria-hidden');
+  else lateral.setAttribute('aria-hidden', 'true');
+  botao.setAttribute('aria-controls', lateral.id);
+  botao.setAttribute('aria-expanded', String(aberto));
+}
 
 function abrirModal({ titulo, corpo, acoes = [], largo = false, aoFechar = null, semFechar = false }) {
   if (_modalAberto) {
     _modalAberto.foco = document.activeElement;
     _modalAberto.fundo.style.display = 'none';
+    _modalAberto.fundo.inert = true;
+    _modalAberto.fundo.setAttribute('aria-hidden', 'true');
     _pilhaModais.push(_modalAberto);
+  } else {
+    _focoBaseModal = document.activeElement;
+    document.body.classList.add('modal-aberto');
+    Array.from(document.body.children).forEach(el => {
+      if (/^(SCRIPT|STYLE|LINK)$/.test(el.tagName)) return;
+      _fundosInertes.set(el, el.inert);
+      el.inert = true;
+    });
   }
+  const tituloId = 'titulo-modal-' + (++_sequenciaModal);
   const fundo = document.createElement('div');
   fundo.className = 'fundo-modal';
   fundo.innerHTML =
-    '<div class="modal' + (largo ? ' largo' : '') + '" role="dialog" aria-modal="true">' +
-      '<header><h2>' + esc(titulo) + '</h2>' +
-      (semFechar ? '' : '<button class="fechar" data-fechar aria-label="Fechar">&times;</button>') + '</header>' +
+    '<div class="modal' + (largo ? ' largo' : '') + '" role="dialog" aria-modal="true" aria-labelledby="' + tituloId + '">' +
+      '<header><h2 id="' + tituloId + '" data-titulo-modal tabindex="-1">' + esc(titulo) + '</h2>' +
+      (semFechar ? '' : '<button type="button" class="fechar" data-fechar aria-label="Fechar">&times;</button>') + '</header>' +
       '<div class="corpo"></div>' +
       (acoes.length ? '<footer></footer>' : '') +
     '</div>';
@@ -235,6 +318,7 @@ function abrirModal({ titulo, corpo, acoes = [], largo = false, aoFechar = null,
   const rodape = fundo.querySelector('footer');
   acoes.forEach((a, i) => {
     const b = document.createElement('button');
+    b.type = 'button';
     b.className = 'btn ' + (a.classe || '');
     b.textContent = a.texto;
     b.dataset.i = i;
@@ -246,8 +330,9 @@ function abrirModal({ titulo, corpo, acoes = [], largo = false, aoFechar = null,
   });
   document.body.appendChild(fundo);
   _modalAberto = { fundo, aoFechar, semFechar };
-  const primeiro = fundo.querySelector('input,select,textarea');
-  if (primeiro && window.innerWidth > 900) setTimeout(() => primeiro.focus(), 60);
+  associarRotulosUI(fundo);
+  // O título recebe foco também no celular, sem abrir o teclado nem saltar o contexto.
+  focarModal(_modalAberto);
   return fundo;
 }
 
@@ -260,7 +345,20 @@ function fecharModal() {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && _modalAberto && !_modalAberto.semFechar) fecharModal();
+  if (!_modalAberto) return;
+  if (e.key === 'Escape' && !_modalAberto.semFechar) {
+    e.preventDefault(); e.stopPropagation(); fecharModal();
+  } else if (e.key === 'Tab') {
+    const itens = focaveisModal(_modalAberto.fundo);
+    const i = itens.indexOf(document.activeElement);
+    if (!itens.length) { e.preventDefault(); focarModal(_modalAberto); }
+    else if (e.shiftKey && i <= 0) { e.preventDefault(); itens[itens.length - 1].focus(); }
+    else if (!e.shiftKey && (i < 0 || i === itens.length - 1)) { e.preventDefault(); itens[0].focus(); }
+  }
+});
+
+document.addEventListener('focusin', (e) => {
+  if (_modalAberto && !_modalAberto.fundo.contains(e.target)) focarModal(_modalAberto);
 });
 
 // Fecha sem disparar o aoFechar (usado quando a própria ação já resolveu a
@@ -287,7 +385,15 @@ function tirarDaPilha(fundo) {
     _modalAberto = _pilhaModais.pop() || null;
     if (_modalAberto) {
       _modalAberto.fundo.style.display = '';
-      if (_modalAberto.foco && _modalAberto.foco.focus) _modalAberto.foco.focus();
+      _modalAberto.fundo.inert = false;
+      _modalAberto.fundo.removeAttribute('aria-hidden');
+      focarModal(_modalAberto, _modalAberto.foco);
+    } else {
+      _fundosInertes.forEach((inert, el) => { if (el.isConnected) el.inert = inert; });
+      _fundosInertes.clear();
+      document.body.classList.remove('modal-aberto');
+      if (!focarElementoUI(_focoBaseModal)) focarElementoUI(document.getElementById('tituloTela'));
+      _focoBaseModal = null;
     }
     return;
   }
@@ -351,7 +457,10 @@ function perguntarData(rotulo, opts = {}) {
         '<input type="date" id="' + id + '" value="' + esc(opts.valor || '') + '"></div>',
       aoFechar: () => resolve(null),
       acoes: [
-        { texto: 'Pular', aoClicar: () => fecharModal() },
+        ...(opts.pular ? [
+          { texto: 'Voltar', aoClicar: () => fecharModal() },
+          { texto: opts.pular, aoClicar: (fundo) => { fecharSilencioso(fundo); resolve(''); } }
+        ] : [{ texto: 'Pular', aoClicar: () => fecharModal() }]),
         { texto: opts.ok || 'Salvar', classe: 'primario', aoClicar: (fundo) => {
           const v = fundo.querySelector('#' + id).value;
           if (!v) { toast('Escolha uma data', 'ruim'); return; }
@@ -363,9 +472,44 @@ function perguntarData(rotulo, opts = {}) {
 }
 
 /* ── Peças de formulário ───────────────────────────────────────────────────── */
+let _sequenciaCampoUI = 0;
+const novoIdCampoUI = () => 'campo-ui-' + (++_sequenciaCampoUI);
+
+function associarRotulosUI(raiz) {
+  raiz.querySelectorAll('.campo').forEach(campoEl => {
+    campoEl.querySelectorAll('label').forEach(label => {
+      if (label.htmlFor || label.querySelector('input,select,textarea')) return;
+      const controles = Array.from(campoEl.querySelectorAll('input:not([type="hidden"]),select,textarea'));
+      const input = controles.find(el => !el.labels?.length && (label.compareDocumentPosition(el) & 4));
+      if (!input) return;
+      input.id = input.id || novoIdCampoUI();
+      label.htmlFor = input.id;
+    });
+  });
+}
+
 function campo(rot, html, dica) {
-  return '<div class="campo"><label>' + esc(rot) + '</label>' + html +
-    (dica ? '<div class="dica">' + esc(dica) + '</div>' : '') + '</div>';
+  html = String(html || '');
+  const controles = [...html.matchAll(/<(input|select|textarea)\b[^>]*>/gi)]
+    .filter(m => !/\btype=["']hidden["']/i.test(m[0]));
+  const idDica = dica ? novoIdCampoUI() + '-dica' : '';
+  const ajuda = dica ? '<div class="dica" id="' + idDica + '">' + esc(dica) + '</div>' : '';
+  if (controles.length > 1 && controles.every(m => /\btype=["'](?:radio|checkbox)["']/i.test(m[0]))) {
+    return '<fieldset class="campo campo-grupo"' + (idDica ? ' aria-describedby="' + idDica + '"' : '') + '><legend>' + esc(rot) + '</legend>' + html + ajuda + '</fieldset>';
+  }
+  let id = '';
+  if (controles.length === 1 && !/\btype=["'](?:radio|checkbox)["']/i.test(controles[0][0])) {
+    const tag = controles[0][0];
+    const idExistente = tag.match(/\sid=["']([^"']*)["']/i);
+    id = idExistente?.[1] || novoIdCampoUI();
+    let novaTag = idExistente ? tag.replace(/\sid=["'][^"']*["']/i, () => ' id="' + id + '"') : tag.replace(/>$/, () => ' id="' + id + '">');
+    if (idDica) {
+      if (/\baria-describedby=["']/i.test(novaTag)) novaTag = novaTag.replace(/(\baria-describedby=["'])([^"']*)(["'])/i, '$1$2 ' + idDica + '$3');
+      else novaTag = novaTag.replace(/>$/, ' aria-describedby="' + idDica + '">');
+    }
+    html = html.slice(0, controles[0].index) + novaTag + html.slice(controles[0].index + tag.length);
+  }
+  return '<div class="campo"><label' + (id ? ' for="' + id + '"' : '') + '>' + esc(rot) + '</label>' + html + ajuda + '</div>';
 }
 
 function entrada(nome, valor, opts = {}) {

@@ -26,11 +26,14 @@ const S = {
   sincronizando: false,
   ultimoPull: 0,
   online: navigator.onLine,
-  erroSync: ''
+  erroSync: '',
+  erroCache: '',
+  cacheDisponivel: false
 };
 
 const K = {
   cache: 'compras_cache_v1',
+  cacheLimpo: 'compras_cache_limpo_em',
   fila: 'compras_fila_v1',
   quem: 'compras_quem',
   senha: 'compras_senha_legado', // não usado: a identidade é o crachá (auth.js)
@@ -44,6 +47,41 @@ const ESCRITA_POR_PERFIL = { obra: ['sc', 'oc'] };
 function podeEscrever(colecao) {
   const permitidas = ESCRITA_POR_PERFIL[S.perfil];
   return !permitidas || permitidas.includes(colecao);
+}
+
+// A fila conserva o trabalho recusado para revisão, mas nunca é uma fonte
+// autorizada para exibir preços. A máscara também vale ao recuperar cache,
+// trocar perfil e reabrir o navegador (não apenas no primeiro snapshot).
+const LEITURA_OBRA_LOCAL = ['sc','oc','forn','equipe','doc','proj','trein','mat','transp'];
+const PRIVADO_LOCAL = ['preco','total','totalLiquido','totalBruto','desconto','frete','valor','liquido','bruto','retencao','adiantamento','condicaoPagamento','banco','dadosBancarios','tokenPublico','token'];
+function registroVisivelLocal(col, registro, perfil = S.perfil) {
+  if (perfil !== 'obra') return registro;
+  if (!LEITURA_OBRA_LOCAL.includes(col)) return null;
+  if (col !== 'oc') return registro;
+  const limpar = value => {
+    if (Array.isArray(value)) return value.map(limpar);
+    if (!value || typeof value !== 'object') return value;
+    const saida = {};
+    for (const [k,v] of Object.entries(value)) if (!PRIVADO_LOCAL.includes(k) && !['medicoes','aditivos'].includes(k)) saida[k] = limpar(v);
+    return saida;
+  };
+  const textoSeguro = value => {
+    if (typeof value === 'string') return value.replace(/R\$\s*-?[\d.]+(?:,\d{1,2})?/g,'R$ •••');
+    if (Array.isArray(value)) return value.map(textoSeguro);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,textoSeguro(v)]));
+  };
+  const saida = limpar(registro);
+  if (Array.isArray(saida.historico)) saida.historico = textoSeguro(saida.historico);
+  return saida;
+}
+function registrosVisiveisLocais(reg, perfil = S.perfil) {
+  return Object.fromEntries(COLECOES_APP.map(col => [col,(reg[col] || []).map(r=>registroVisivelLocal(col,r,perfil)).filter(Boolean)]));
+}
+function cfgVisivelLocal(cfg, perfil = S.perfil) {
+  if (!cfg || perfil === 'direcao') return cfg;
+  const saida = {...cfg}; delete saida.usuarios; delete saida.senhaHash;
+  return saida;
 }
 
 /* ── SHA-256 (a senha nunca viaja em texto puro) ───────────────────────────── */
@@ -90,9 +128,9 @@ async function api(action, dados = {}, opts = {}) {
 const apiArq = (action, dados = {}, opts = {}) => api(action, dados, Object.assign({ url: API_ARQ }, opts));
 
 /* ── Cache local ───────────────────────────────────────────────────────────── */
-function lerCache() {
+async function lerCache() {
   try {
-    const c = JSON.parse(localStorage.getItem(K.cache) || 'null');
+    const c = await lerSnapshotLocal();
     if (c && c.reg) { S.reg = Object.assign(S.reg, c.reg); S.cfg = c.cfg || null; S.ultimoPull = c.em || 0; }
   } catch { /* cache corrompido: começa limpo */ }
   try { S.fila = JSON.parse(localStorage.getItem(K.fila) || '[]'); } catch { S.fila = []; }
@@ -108,35 +146,108 @@ function lerCache() {
   S.perfil = localStorage.getItem(K.perfil) || 'obra';
   S.usuarioId = localStorage.getItem(K.usuario) || '';
   S.acessoProprio = !!S.usuarioId;
+  S.reg = registrosVisiveisLocais(S.reg);
+  S.cfg = cfgVisivelLocal(S.cfg);
   // Se o cache tiver se perdido (memória cheia), a fila reconstrói o que ainda
   // não subiu — senão o trabalho feito sem sinal some da tela ao reabrir o app.
   for (const f of S.fila) {
+    const visivel = registroVisivelLocal(f.colecao, f.registro);
+    if (!visivel) continue;
     const arr = S.reg[f.colecao] || (S.reg[f.colecao] = []);
     const i = arr.findIndex((r) => r.id === f.registro.id);
-    const rec = Object.assign({}, f.registro, { _pendente: true });
+    const rec = Object.assign({}, visivel, { _pendente: true });
     if (i >= 0) arr[i] = rec; else arr.unshift(rec);
   }
 }
 
+// O snapshot volumoso usa IndexedDB; a fila pequena continua síncrona para
+// garantir persistência ANTES de o formulário anunciar que foi guardado.
+let _cacheDB = null;
+let _cacheEscrita = Promise.resolve();
+let _cacheVersao = 0;
+function abrirCacheDB() {
+  if (typeof indexedDB === 'undefined') return Promise.reject(new Error('Armazenamento ampliado indisponível'));
+  if (_cacheDB) return _cacheDB;
+  _cacheDB = new Promise((resolve, reject) => {
+    const req = indexedDB.open('compras_local_v2', 1);
+    req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains('dados')) req.result.createObjectStore('dados'); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => { _cacheDB = null; reject(req.error); };
+    req.onblocked = () => { _cacheDB = null; reject(new Error('Feche outras abas antigas para atualizar a cópia local')); };
+  });
+  return _cacheDB;
+}
+async function cacheDB(acao, valor) {
+  const db = await abrirCacheDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('dados', acao === 'get' ? 'readonly' : 'readwrite');
+    const store = tx.objectStore('dados');
+    const req = acao === 'get' ? store.get('snapshot') : acao === 'delete' ? store.delete('snapshot') : store.put(valor, 'snapshot');
+    tx.oncomplete = () => resolve(req.result);
+    tx.onerror = () => reject(tx.error || req.error);
+    tx.onabort = () => reject(tx.error || new Error('Cópia local interrompida'));
+  });
+}
+async function lerSnapshotLocal() {
+  let db = null, legado = null;
+  try { db = await cacheDB('get'); } catch { /* armazenamento temporariamente indisponível */ }
+  try { legado = JSON.parse(localStorage.getItem(K.cache) || 'null'); } catch { /* sem cópia */ }
+  const versao = c => Number(c?.salvoEm || c?.em || 0);
+  const invalidadoEm = Number(localStorage.getItem(K.cacheLimpo) || 0);
+  const usuario = localStorage.getItem(K.usuario) || '';
+  const valido = c => c && (!invalidadoEm || versao(c) > invalidadoEm) && (!c.usuarioId || c.usuarioId === usuario);
+  if (!valido(db)) db = null;
+  if (!valido(legado)) legado = null;
+  const c = legado && (!db || versao(legado) > versao(db)) ? legado : db;
+  _cacheVersao = Math.max(_cacheVersao, versao(c));
+  S.cacheDisponivel = !!c;
+  return c;
+}
 function gravarCache() {
-  try {
-    localStorage.setItem(K.cache, JSON.stringify({ reg: S.reg, cfg: S.cfg, em: Date.now() }));
-  } catch (e) {
-    console.warn('cache cheio:', e && e.message);
-  }
+  // Clonar agora: uma gravação posterior nunca deve trocar o conteúdo desta.
+  _cacheVersao = Math.max(Date.now(), _cacheVersao + 1);
+  const snapshot = JSON.parse(JSON.stringify({reg:registrosVisiveisLocais(S.reg),cfg:cfgVisivelLocal(S.cfg),em:S.ultimoPull,salvoEm:_cacheVersao,usuarioId:S.usuarioId}));
+  _cacheEscrita = _cacheEscrita.catch(() => {}).then(async () => {
+    try {
+      await cacheDB('put', snapshot);
+      // Só remove o snapshot legado depois de confirmar a transação nova.
+      try { localStorage.removeItem(K.cache); } catch { /* sem efeito na fila */ }
+      S.erroCache = ''; S.cacheDisponivel = true;
+    } catch (e) {
+      try {
+        localStorage.setItem(K.cache, JSON.stringify(snapshot));
+        S.erroCache = ''; S.cacheDisponivel = true;
+      } catch {
+        S.erroCache = 'Cópia local indisponível. Mantenha conexão para consultar dados atualizados.';
+        S.cacheDisponivel = false;
+      }
+    }
+    document.dispatchEvent(new CustomEvent('domo:status'));
+  });
+  return _cacheEscrita;
+}
+async function limparCacheLocal() {
+  // Mesmo se o IndexedDB estiver temporariamente indisponível para apagar,
+  // a cópia antiga não pode ressurgir no próximo login/reload.
+  _cacheVersao = Math.max(Date.now(), _cacheVersao + 1);
+  try { localStorage.setItem(K.cacheLimpo, String(_cacheVersao)); } catch { /* ainda tenta apagar o banco */ }
+  await _cacheEscrita.catch(() => {});
+  try { await cacheDB('delete'); } catch { /* indisponível */ }
+  try { localStorage.removeItem(K.cache); } catch { /* modo restrito */ }
+  S.cacheDisponivel = false; S.erroCache = '';
 }
 
 // A fila é o que segura o trabalho feito sem internet: se ela não couber no
 // aparelho, o usuário PRECISA saber (o cache pode falhar calado, a fila não).
-function gravarFila() {
+function gravarFila(fila = S.fila) {
   try {
-    localStorage.setItem(K.fila, JSON.stringify(S.fila));
+    localStorage.setItem(K.fila, JSON.stringify(fila));
     return true;
   } catch (e) {
     // Tenta abrir espaço jogando fora o cache (ele se refaz no próximo snapshot).
     try {
       localStorage.removeItem(K.cache);
-      localStorage.setItem(K.fila, JSON.stringify(S.fila));
+      localStorage.setItem(K.fila, JSON.stringify(fila));
       return true;
     } catch (e2) {
       S.erroSync = 'memória do aparelho cheia — não consigo guardar offline';
@@ -169,16 +280,16 @@ function salvar(col, registro, opts = {}) {
   });
   if (!local.criadoEm) { local.criadoEm = local.atualizadoEm; local.criadoPor = S.quem || '—'; }
 
+  const proximaFila = S.fila.filter((f) => !(f.colecao === col && f.registro.id === id));
+  proximaFila.push({ colecao: col, registro: local, seq: S.seqFila + 1 });
+  if (!gravarFila(proximaFila)) throw new Error('Não foi possível guardar a alteração. Libere espaço e tente novamente; o formulário foi preservado.');
+  S.seqFila++;
+  S.fila = proximaFila;
   const arr = S.reg[col] || (S.reg[col] = []);
   const i = arr.findIndex((r) => r.id === id);
   if (i >= 0) arr[i] = local; else arr.unshift(local);
   gravarCache();
-
-  // Cada entrada leva um número próprio. Sem isso, uma alteração feita enquanto
-  // o envio anterior estava no ar era apagada da fila junto com a antiga.
-  S.fila = S.fila.filter((f) => !(f.colecao === col && f.registro.id === id));
-  S.fila.push({ colecao: col, registro: local, seq: ++S.seqFila });
-  gravarFila();
+  document.dispatchEvent(new CustomEvent('domo:status'));
 
   if (!opts.semSubir) subirFila();
   return local;
@@ -200,7 +311,8 @@ let _subindo = false;
 async function subirFila() {
   if (_subindo || !S.fila.length || !navigator.onLine) return;
   _subindo = true;
-  const enviando = S.fila.slice(0, 25);
+  const enviando = S.fila.filter(f => !f.erro).slice(0, 25);
+  if (!enviando.length) { _subindo = false; return; }
   try {
     const r = await api('salvarLote', {
       itens: enviando.map((f) => ({ colecao: f.colecao, registro: limparParaEnvio(f.registro) }))
@@ -209,19 +321,24 @@ async function subirFila() {
     // mexeu de novo no mesmo registro durante o envio, a alteração nova fica.
     // Remove pelas PRÓPRIAS entradas enviadas (identidade), não pelo número —
     // assim nem um seq repetido leva junto o que não foi enviado.
+    const recusados = r.recusados || [];
+    const chave = (col, id) => col + '|' + id;
+    const aceitas = new Set((r.salvos || []).map(x => chave(x._col, x.id)));
     const enviadas = new Set(enviando);
-    S.fila = S.fila.filter((f) => !enviadas.has(f));
-    gravarFila();
-    // O servidor agora recusa ITEM A ITEM (nunca o pacote). Avisa o que ficou
-    // de fora, com nome e motivo — antes o trabalho sumia calado.
-    if ((r.recusados || []).length) {
-      document.dispatchEvent(new CustomEvent('domo:sempermissao', {
-        detail: { qtd: r.recusados.length, msg: r.recusados[0].motivo, itens: r.recusados }
-      }));
-    }
+    const proximaFila = S.fila.filter(f => !(enviadas.has(f) && aceitas.has(chave(f.colecao, f.registro.id)))).map(f => {
+      const recusa = enviadas.has(f) && recusados.find(x => x.colecao === f.colecao && x.id === f.registro.id);
+      return recusa ? {...f, erro: recusa.motivo || 'Gravação recusada pelo servidor'} : f;
+    });
+    if (!gravarFila(proximaFila)) throw new Error('Resposta recebida, mas a fila local não pôde ser atualizada. Sincronize novamente.');
+    S.fila = proximaFila;
+    if (recusados.length) document.dispatchEvent(new CustomEvent('domo:sempermissao', {
+      detail: { qtd: recusados.length, msg: recusados[0].motivo, itens: recusados }
+    }));
     const aindaNaFila = new Set(S.fila.map((f) => f.colecao + '|' + f.registro.id));
-    for (const salvo of (r.salvos || [])) {
-      const col = salvo._col;
+    for (const confirmado of (r.salvos || [])) {
+      const col = confirmado._col;
+      const salvo = registroVisivelLocal(col, confirmado);
+      if (!salvo) continue;
       // Registro com alteração mais nova esperando: não sobrescreve a tela.
       if (aindaNaFila.has(col + '|' + salvo.id)) continue;
       const arr = S.reg[col] || (S.reg[col] = []);
@@ -229,9 +346,9 @@ async function subirFila() {
       if (i >= 0) arr[i] = salvo; else arr.unshift(salvo);
     }
     gravarCache();
-    S.erroSync = '';
+    S.erroSync = S.fila.some(f => f.erro) ? 'Há alterações recusadas; conteúdo preservado neste aparelho.' : '';
     document.dispatchEvent(new CustomEvent('domo:dados'));
-    if (S.fila.length) setTimeout(subirFila, 300);
+    if (S.fila.some(f => !f.erro)) setTimeout(subirFila, 300);
   } catch (e) {
     S.erroSync = e.message || 'falha ao enviar';
     if (e.semSenha) document.dispatchEvent(new CustomEvent('domo:semsenha'));
@@ -240,13 +357,10 @@ async function subirFila() {
     // exatamente o que não foi salvo, com o código de cada documento.
     if (e.semPermissao) {
       const enviadas = new Set(enviando);
-      S.fila = S.fila.filter((f) => !enviadas.has(f));
-      gravarFila();
+      const bloqueadas = S.fila.map(f => enviadas.has(f) ? {...f, erro:e.message} : f);
+      if (gravarFila(bloqueadas)) S.fila = bloqueadas;
       document.dispatchEvent(new CustomEvent('domo:sempermissao', {
-        detail: {
-          qtd: enviando.length, msg: e.message,
-          itens: enviando.map((f) => ({ colecao: f.colecao, id: f.registro.id, codigo: f.registro.codigo || '' }))
-        }
+        detail: {qtd:enviando.length,msg:e.message,itens:enviando.map(f=>({colecao:f.colecao,id:f.registro.id,codigo:f.registro.codigo||''}))}
       }));
     }
     console.warn('fila:', e.message);
@@ -278,10 +392,11 @@ async function puxar() {
   try {
     await subirFila();
     const r = await api('snapshot');
+    const perfilServidor = r.eu?.perfil || S.perfil;
     const novo = regVazio();
     for (const reg of (r.registros || [])) {
-      const col = reg._col;
-      if (novo[col]) novo[col].push(reg);
+      const col = reg._col, visivel = registroVisivelLocal(col, reg, perfilServidor);
+      if (novo[col] && visivel) novo[col].push(visivel);
     }
     // Não descarta o que este aparelho acabou de mexer. A LISTAGEM do Blobs
     // tem consistência eventual (~1min): um registro recém-gravado pode não
@@ -294,21 +409,23 @@ async function puxar() {
     const naFila = new Set(S.fila.map((f) => f.colecao + '|' + f.registro.id));
     for (const col of Object.keys(novo)) {
       const vindos = new Set(novo[col].map((x) => x.id));
-      for (const local of (S.reg[col] || [])) {
+      for (const anterior of (S.reg[col] || [])) {
+        const local = registroVisivelLocal(col, anterior, perfilServidor);
+        if (!local) continue;
         const chave = col + '|' + local.id;
         if (naFila.has(chave)) {
           // Alteração ainda não enviada SEMPRE ganha da versão do servidor,
           // mesmo que o servidor já conheça o registro — senão o recebimento
           // feito sem sinal era desfeito na tela do próprio autor.
           novo[col] = novo[col].filter((x) => x.id !== local.id);
-          novo[col].push(local);
+          novo[col].push({...local, _pendente:true});
         } else if (!vindos.has(local.id) && recente(local)) {
           novo[col].push(local);
         }
       }
     }
     S.reg = novo;
-    S.cfg = r.cfg || S.cfg;
+    S.cfg = cfgVisivelLocal(r.cfg || S.cfg, perfilServidor);
     // O servidor diz o perfil a cada sincronização: se a direção mudar o
     // acesso de alguém, o menu daquela pessoa acompanha sem precisar sair.
     if (r.eu && r.eu.perfil) {
@@ -323,7 +440,7 @@ async function puxar() {
       } catch { /* modo privado: segue sem lembrar */ }
     }
     S.ultimoPull = Date.now();
-    S.erroSync = '';
+    S.erroSync = S.fila.some(f => f.erro) ? 'Há alterações recusadas; conteúdo preservado neste aparelho.' : '';
     gravarCache();
     // Só avisa a tela quando algo REALMENTE mudou. Antes, o sync de 90s
     // redesenhava a página do nada e jogava a rolagem pro topo no meio da leitura.

@@ -502,22 +502,29 @@ function formularioTreinamento() {
         const arq = fundo.querySelector('#treinArq');
         const file = arq && arq.files && arq.files[0];
         if (!d.link && !file) { toast('Cole um link OU escolha um arquivo', 'ruim'); return; }
-        fecharEste(fundo);
-        let meta = null;
-        if (file) {
-          const metas = await subirArquivos([file]);
-          if (!metas.length) { toast('O arquivo não subiu — nada foi salvo.', 'ruim'); return; }
-          meta = metas[0];
-        }
-        salvar('trein', {
-          nome: d.nome, area: d.area, duracao: d.duracao, descricao: d.descricao,
-          link: d.link || '',
-          arquivoId: meta ? meta.id : '',
-          arquivoNome: file ? file.name : '',
-          tamanho: file ? file.size : 0,
-        });
-        render();
-        toast('Treinamento salvo', 'bom');
+        if(fundo.dataset.salvando==='1')return;
+        fundo.dataset.salvando='1';
+        const botoes=[...fundo.querySelectorAll('footer button,header button')];botoes.forEach(b=>b.disabled=true);
+        try {
+          // A retentativa só reaproveita o upload do mesmo File selecionado.
+          // Nome/tamanho iguais não provam que o conteúdo é o mesmo arquivo.
+          let meta = file && fundo._arquivoEnviado?.arquivo === file ? fundo._arquivoEnviado.meta : null;
+          if (!file || fundo._arquivoEnviado?.arquivo !== file) fundo._arquivoEnviado = null;
+          if (file && !meta) {
+            const metas = await subirArquivos([file]);
+            if (!metas.length) { toast('O arquivo não subiu. O formulário foi mantido; tente novamente.', 'ruim'); return; }
+            meta = metas[0]; fundo._arquivoEnviado={arquivo:file,meta};
+          }
+          salvar('trein', {
+            nome: d.nome, area: d.area, duracao: d.duracao, descricao: d.descricao,
+            link: d.link || '', arquivoId: meta ? meta.id : '',
+            arquivoNome: file ? file.name : '', tamanho: file ? file.size : 0,
+          });
+          fecharEste(fundo);render();
+          toast('Treinamento guardado. Acompanhe a confirmação de envio no rodapé.', 'bom');
+        } catch(e) {toast('Não foi possível guardar: '+e.message,'ruim');}
+        finally {fundo.dataset.salvando='';botoes.forEach(b=>b.disabled=false);}
+
       } }
     ]
   });

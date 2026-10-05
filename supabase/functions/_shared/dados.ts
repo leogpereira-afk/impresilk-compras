@@ -33,8 +33,9 @@ export const tokenCurto = () => {
 /* ── registros ─────────────────────────────────────────────────────────────── */
 export async function lerUm(colecao: string, id: string): Promise<any | null> {
   if (!id) return null;
-  const { data } = await db.from("compras_registros").select("registro")
+  const { data, error } = await db.from("compras_registros").select("registro")
     .eq("colecao", colecao).eq("id", id).maybeSingle();
+  if (error) throw new Error("ler " + colecao + ": " + error.message);
   return data ? data.registro : null;
 }
 
@@ -45,6 +46,25 @@ export async function gravarUm(colecao: string, id: string, registro: any): Prom
     apagado: !!registro.apagadoEm,
   });
   if (error) throw new Error("gravar " + colecao + ": " + error.message);
+}
+
+// Compare-and-swap: só grava se a versão lida continua sendo a atual. Em
+// conflito a regra de negócio roda novamente sobre o registro mais recente.
+export async function atualizarRegistro(
+  colecao: string, id: string, transformar: (atual: any | null) => Promise<any> | any,
+): Promise<any> {
+  for (let tentativa = 0; tentativa < 8; tentativa++) {
+    const atual = await lerUm(colecao, id);
+    const novo = await transformar(atual == null ? null : structuredClone(atual));
+    if (novo === null) return atual;
+    const { data, error } = await db.rpc("compras_gravar_se_atual", {
+      p_colecao: colecao, p_id: id, p_esperado: atual, p_novo: novo,
+    });
+    if (error) throw new Error("Não foi possível confirmar a gravação: " + error.message);
+    if (data === true) return novo;
+    if (data !== false) throw new Error("Confirmação de gravação inválida");
+  }
+  throw new Error("Outro aparelho está atualizando este registro. Seus dados continuam na fila; tente novamente.");
 }
 
 // Todos os registros (com a lixeira — o cliente é quem esconde o apagado).
@@ -174,7 +194,7 @@ export const BUCKET = "compras-arquivos";
 
 export async function subirParte(chave: string, corpo: Uint8Array): Promise<void> {
   const { error } = await db.storage.from(BUCKET).upload(chave, corpo, {
-    contentType: "application/octet-stream", upsert: true,
+    contentType: "application/octet-stream", upsert: false,
   });
   if (error) throw new Error("subir " + chave + ": " + error.message);
 }

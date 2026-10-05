@@ -23,12 +23,16 @@ import {
   baixarParte,
   apagarArquivo,
   apagarDeVez,
-  lerColecaoBruta,
+  lerColecaoBruta, atualizarRegistro,
 } from "../_shared/dados.ts";
 
 // Coleção interna: guarda o "meta" de cada arquivo (nome, tamanho, partes).
 // Não aparece em COLECOES porque não é dado do negócio — é encanamento.
 const META = "_arqmeta";
+const TAM_PARTE = 2.5 * 1024 * 1024;
+const MAX_ARQUIVO = 1024 * 1024 * 1024;
+const mesmoConteudo = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+const uploadProprio = (meta: any, eu: { id: string }) => meta.donoId && meta.donoId === eu.id;
 
 const b64ParaBytes = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 const bytesParaB64 = (b: Uint8Array) => {
@@ -54,7 +58,7 @@ Deno.serve(async (req) => {
   // Mesma identidade do nucleo: o crachá da Central de Acessos. O acervo guarda
   // foto de recebimento e projeto — se ele aceitasse outra régua, seria a porta
   // dos fundos do controle de acesso que o nucleo aplica.
-  const eu = await identificarPorCracha(req);
+  const eu = await identificarPorCracha(req, ["iniciar", "parte", "finalizar", "apagar"].includes(body.action));
   if (!eu) return json({ error: "Entre de novo: sessão inválida ou vencida.", semSenha: true }, 401);
 
   // 'apagar' e 'uso' mexem no acervo inteiro — a mesma régua do nucleo vale
@@ -75,6 +79,11 @@ Deno.serve(async (req) => {
 
       // Abre um arquivo novo e devolve o id que as partes vão usar.
       case "iniciar": {
+        const tamanho = Number(body.tamanho), partes = Number(body.partes);
+        if (!Number.isSafeInteger(tamanho) || tamanho < 0 || tamanho > MAX_ARQUIVO ||
+            !Number.isInteger(partes) || partes !== Math.max(1, Math.ceil(tamanho / TAM_PARTE))) {
+          return json({ ok: false, error: "Tamanho ou quantidade de partes inválidos (limite de 1 GB)." }, 400);
+        }
         const id = idNovo() + Math.random().toString(36).slice(2, 6);
         const meta = {
           id,
@@ -84,8 +93,7 @@ Deno.serve(async (req) => {
           // octet-stream, então o PDF baixava sem abrir. `?? body.tipo` deixa
           // tolerante a qualquer chamador futuro.
           mime: String(body.mime ?? body.tipo ?? "application/octet-stream").slice(0, 100),
-          tamanho: Number(body.tamanho) || 0,
-          partes: Math.max(1, Number(body.partes) || 1),
+          tamanho, partes, donoId: eu.id,
           recebidas: 0,
           criadoEm: agora(),
           criadoPor: quem,
@@ -105,27 +113,47 @@ Deno.serve(async (req) => {
         if (!Number.isInteger(idx) || idx < 0) return json({ ok: false, error: "Índice de parte inválido" }, 400);
         const meta = await lerUm(META, id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
-        if (typeof dados !== "string") return json({ ok: false, error: "Parte vazia" }, 400);
-        await subirParte(id + "/p" + idx, b64ParaBytes(dados));
-        meta.recebidas = Math.max(Number(meta.recebidas) || 0, idx + 1);
-        await gravarUm(META, id, meta);
-        return json({ ok: true, recebidas: meta.recebidas, partes: meta.partes });
+        if (meta.pronto || !uploadProprio(meta, eu)) return json({ ok: false, error: "Este arquivo não pode ser alterado. Inicie um novo envio." }, 403);
+        if (idx >= meta.partes) return json({ ok: false, error: "Índice fora do arquivo" }, 400);
+        if (typeof dados !== "string" || dados.length > Math.ceil(TAM_PARTE / 3) * 4) return json({ ok: false, error: "Parte inválida ou muito grande" }, 400);
+        let bytes: Uint8Array;
+        try { bytes = b64ParaBytes(dados); } catch { return json({ ok: false, error: "Conteúdo de parte inválido" }, 400); }
+        const esperado = Math.min(TAM_PARTE, meta.tamanho - idx * TAM_PARTE);
+        if (bytes.length !== esperado) return json({ ok: false, error: "A parte não tem o tamanho declarado" }, 400);
+        const chave = id + "/p" + idx;
+        // Objetos imutáveis: o reenvio idêntico é permitido, nunca substituição.
+        // Mesmo uma parte iniciada antes de finalizar não pode trocar bytes.
+        try { await subirParte(chave, bytes); }
+        catch (e) {
+          const existente = await baixarParte(chave);
+          if (!existente) throw e;
+          if (!mesmoConteudo(existente, bytes)) return json({ ok: false, error: "Esta parte já foi enviada com outro conteúdo. Inicie um novo envio." }, 409);
+        }
+        const salvo = await atualizarRegistro(META, id, atual => {
+          if (!atual || !uploadProprio(atual, eu)) throw new Error("Envio indisponível");
+          if (atual.pronto) return null;
+          return { ...atual, recebidas: Math.max(Number(atual.recebidas) || 0, idx + 1) };
+        });
+        return json({ ok: true, recebidas: salvo.recebidas, partes: salvo.partes });
       }
 
       case "finalizar": {
         const meta = await lerUm(META, body.id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
-        // Não confia só no contador: confere pedaço por pedaço no Storage, como
-        // o backend antigo fazia. Um contador certo com uma parte que não subiu
-        // deixaria o arquivo "pronto" e corrompido.
-        for (let i = 0; i < (meta.partes || 1); i++) {
+        if (!uploadProprio(meta, eu)) return json({ ok: false, error: "Somente quem iniciou o envio pode concluí-lo. Inicie um novo envio." }, 403);
+        if (meta.pronto) return json({ ok: true, meta });
+        let tamanho = 0;
+        for (let i = 0; i < meta.partes; i++) {
           const p = await baixarParte(body.id + "/p" + i);
-          if (!p) return json({ ok: false, error: "Falta a parte " + i + " de " + meta.partes }, 400);
+          if (!p || p.length !== Math.min(TAM_PARTE, meta.tamanho - i * TAM_PARTE)) return json({ ok: false, error: "Falta ou está incompleta a parte " + i + " de " + meta.partes }, 400);
+          tamanho += p.length;
         }
-        meta.pronto = true;
-        meta.concluidoEm = agora();
-        await gravarUm(META, body.id, meta);
-        return json({ ok: true, meta });
+        if (tamanho !== meta.tamanho) return json({ ok: false, error: "Arquivo incompleto. Reenvie as partes pendentes." }, 400);
+        const salvo = await atualizarRegistro(META, body.id, atual => {
+          if (!atual || !uploadProprio(atual, eu)) throw new Error("Envio indisponível");
+          return atual.pronto ? null : { ...atual, pronto: true, recebidas: atual.partes, concluidoEm: agora() };
+        });
+        return json({ ok: true, meta: salvo });
       }
 
       case "meta": {
@@ -139,6 +167,7 @@ Deno.serve(async (req) => {
         if (!Number.isInteger(idx) || idx < 0) return json({ ok: false, error: "Índice de parte inválido" }, 400);
         const meta = await lerUm(META, body.id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
+        if (idx >= meta.partes) return json({ ok: false, error: "Índice fora do arquivo" }, 400);
         const bytes = await baixarParte(body.id + "/p" + idx);
         if (!bytes) return json({ ok: false, error: "Parte não encontrada" }, 404);
         return json({ ok: true, dados: bytesParaB64(bytes), partes: meta.partes, meta });

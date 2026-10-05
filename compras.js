@@ -200,7 +200,7 @@ function linhaItem(it = {}, comPreco = false) {
   const mats = redeAtivos('mat');
   if (it.materialId && !mats.some(m => m.id === it.materialId)) { const m = achar('mat', it.materialId); if (m) mats.push(m); }
   return '<div class="item-linha' + (comPreco ? ' com-preco' : '') + '" data-item' +
-    (it.id ? ' data-id="' + esc(it.id) + '"' : '') + ' data-nome-fornecedor="' + esc(it.nomeFornecedor || '') + '" data-codigo-fornecedor="' + esc(it.codigoFornecedor || '') + '">' +
+    (it.id ? ' data-id="' + esc(it.id) + '"' : '') + ' data-origem-sc-id="' + esc(it.origemScId || '') + '" data-origem-sc-item-id="' + esc(it.origemScItemId || '') + '" data-nome-fornecedor="' + esc(it.nomeFornecedor || '') + '" data-codigo-fornecedor="' + esc(it.codigoFornecedor || '') + '">' +
     '<div class="campo descricao"><label>Material padrão (opcional)</label><select data-i="materialId"><option value="">Descrição livre — sem agrupamento</option>' + mats.map(m => '<option value="' + esc(m.id) + '"' + (it.materialId === m.id ? ' selected' : '') + '>' + esc(m.nome) + ' · ' + esc(m.unidade) + '</option>').join('') + '</select>' + (podeVer('materiais') ? '<button type="button" class="btn pequeno produto-montar-item" data-montar-produto>Montar produto por cor e medida</button>' : '') + '<label>Descrição da compra</label>' +
       '<input type="text" data-i="descricao" value="' + esc(it.descricao || '') + '" placeholder="Material / serviço"' +
       (catalogoProdutos().produtos.length ? ' list="catalogoProdutos"' : '') + '></div>' +
@@ -212,7 +212,7 @@ function linhaItem(it = {}, comPreco = false) {
       '<div class="campo"><label>Preço unit.</label><input type="text" data-i="preco" inputmode="decimal" value="' + esc(paraCampo(it.preco)) + '"></div>' +
       '<div class="campo"><label>Marca / obs</label><input type="text" data-i="marca" value="' + esc(it.marca || '') + '"></div>'
       : '') +
-    '<button class="lixeira" data-tirar title="Tirar item">✕</button>' +
+    '<button type="button" class="lixeira" data-tirar title="Tirar item" aria-label="Tirar item">✕</button>' +
   '</div>';
 }
 
@@ -222,7 +222,7 @@ function lerItens(raiz, comPreco) {
     return {
       id: l.dataset.id || (Date.now().toString(36) + i),
       n: i + 1,
-      materialId: v('materialId'),
+      materialId: v('materialId'), origemScId: l.dataset.origemScId || '', origemScItemId: l.dataset.origemScItemId || '',
       nomeFornecedor: l.dataset.nomeFornecedor || '', codigoFornecedor: l.dataset.codigoFornecedor || '',
       descricao: v('descricao').trim(),
       unid: v('unid'),
@@ -237,10 +237,27 @@ function ligarItens(caixa, comPreco) {
   const ligar = (linha) => {
     const sm = linha.querySelector('[data-i=materialId]'), un = linha.querySelector('[data-i=unid]');
     if (sm) sm.addEventListener('change', () => { const m = achar('mat', sm.value); if (!m) return; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; linha.querySelector('[data-i=descricao]').value = descricaoMaterialPadrao(m); if (![...un.options].some(o => o.value === m.unidade)) un.add(new Option(m.unidade, m.unidade)); un.value = m.unidade; });
-    un.addEventListener('change', () => { const m = sm && achar('mat',sm.value); if (m && m.unidade !== un.value) { sm.value = ''; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; toast('Unidade alterada: o vínculo com o material padrão foi retirado.'); } });
-    linha.querySelector('[data-i=descricao]').addEventListener('input', () => { if (sm && sm.value) { sm.value = ''; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; toast('Descrição alterada: selecione novamente o material padrão se for equivalente.'); } });
+    un.addEventListener('change', async () => {
+      const m = sm && achar('mat', sm.value);
+      if (!m || m.unidade === un.value) return;
+      const desejada = un.value;
+      un.value = m.unidade;
+      if (await confirmar('O material padrão usa ' + m.unidade + '. Usar ' + desejada + ' transforma este item em descrição livre, sem agrupamento no catálogo.', { titulo: 'Alterar a unidade?', ok: 'Usar descrição livre' })) {
+        un.value = desejada; sm.value = ''; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = '';
+        document.getElementById('fOC')?.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    // A descrição do pedido pode ganhar detalhes sem perder a classificação.
+    // A escolha explícita de "Descrição livre" continua disponível no seletor.
+    sm?.addEventListener('change', () => { if (!sm.value) { linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; } });
+    linha.querySelectorAll('[data-i]').forEach((c) => {
+      const nomes = { materialId: 'Material padrão', descricao: 'Descrição da compra', unid: 'Unidade', qtd: 'Quantidade', preco: 'Preço unitário', marca: 'Marca ou observação' };
+      c.setAttribute('aria-label', nomes[c.dataset.i]);
+    });
+    ligarRotulosRede(linha);
+    if (typeof associarRotulosUI === 'function') associarRotulosUI(linha);
     const montar=linha.querySelector('[data-montar-produto]');
-    if(montar)montar.onclick=()=>escolherModeloProduto(m=>{if(![...sm.options].some(o=>o.value===m.id))sm.add(new Option(m.nome+' · '+m.unidade,m.id));sm.value=m.id;sm.dispatchEvent(new Event('change'));});
+    if(montar)montar.onclick=()=>escolherModeloProduto(m=>{if(![...sm.options].some(o=>o.value===m.id))sm.add(new Option(m.nome+' · '+m.unidade,m.id));sm.value=m.id;sm.dispatchEvent(new Event('change', { bubbles: true }));});
     const b = linha.querySelector('[data-tirar]');
     if (b) b.addEventListener('click', () => { linha.remove(); if (caixa.dataset.recalcula) recalcularOC(); });
     if (comPreco) linha.querySelectorAll('input').forEach((i) => i.addEventListener('input', () => {
@@ -462,6 +479,8 @@ function telaSolicitacao(el, id) {
   if (!s) { el.innerHTML = vazio('🤔', 'Solicitação não encontrada'); cabecalho('Solicitação', ''); return; }
 
   const podeAprovar = s.situacao === 'nova';
+  const saldoCompra = itensPendentesSC(s);
+  const compraParcial = saldoCompra.length > 0 && saldoScPorItem(s).some(x => x.comprado > 0);
   const decide = typeof podeVer !== 'function' || podeVer('cotacoes');
   cabecalho(s.codigo || 'Solicitação', (s.obra || '') + ' · ' + (s.setor || ''),
     '<a class="btn" href="#/solicitacoes">← Voltar</a>');
@@ -482,6 +501,7 @@ function telaSolicitacao(el, id) {
           // Toda alteração fica no histórico da solicitação, com quem mudou e
           // o que era antes: ajustar não é apagar o que a pessoa pediu.
           '<div id="itensSC">' + htmlItensSC(s) + '</div>' +
+          (['em_compra', 'em_cotacao'].includes(s.situacao) ? '<div class="aviso info">' + (saldoCompra.length ? 'Ainda falta comprar: ' + esc(saldoCompra.map(i => fmt.numero(i.qtd) + ' ' + i.unid + ' ' + i.descricao).join('; ')) : 'Todos os itens já estão comprometidos em ordens de compra. Acompanhe o recebimento abaixo.') + '</div>' : '') +
           (s.justificativa ? '<p style="margin-top:12px"><b>Observação:</b> ' + esc(s.justificativa) + '</p>' : '') +
           (s.motivoRecusa ? '<div class="aviso ruim" style="margin-top:12px"><b>Recusada:</b> ' + esc(s.motivoRecusa) + '</div>' : '') +
           '<div class="barra-acoes" style="margin-top:14px">' +
@@ -492,8 +512,8 @@ function telaSolicitacao(el, id) {
             (decide && podeAprovar ? '<button class="btn verde" id="aprovar">✓ Aprovar</button>' +
               '<button class="btn perigo" id="recusar">✕ Recusar</button>' : '') +
             (decide && ['nova', 'aprovada', 'em_cotacao', 'em_compra'].includes(s.situacao)
-              ? '<button class="btn primario" id="pedirCot">💵 Pedir cotação (3 preços)</button>' +
-                '<button class="btn" id="gerarOC">🧾 Comprar direto</button>' : '') +
+              ? '<button class="btn primario" id="pedirCot"' + (!saldoCompra.length ? ' disabled' : '') + '>💵 ' + (compraParcial ? 'Cotar saldo' : 'Pedir cotação (3 preços)') + '</button>' +
+                '<button class="btn" id="gerarOC"' + (!saldoCompra.length ? ' disabled' : '') + '>🧾 ' + (compraParcial ? 'Comprar saldo' : 'Comprar direto') + '</button>' : '') +
             ((s.solicitante || {}).telefone ? '<button class="btn zap" id="zapSolic">Falar com quem pediu</button>' : '') +
             (decide ? '<button class="btn fantasma" id="apagarSC">Apagar</button>' : '') +
           '</div>' +
@@ -610,16 +630,44 @@ function telaSolicitacao(el, id) {
   el.querySelectorAll('[data-vercot]').forEach((b) => b.addEventListener('click', () => irPara('cotacoes/' + b.dataset.vercot)));
 }
 
+// Reconciliação por identidade de item, sem adivinhar pelo texto do material.
+function unidadesCompativeisSaldo(a, b) {
+  const esquerda = String(a || '').trim().toLowerCase(), direita = String(b || '').trim().toLowerCase();
+  return !esquerda || !direita || esquerda === direita;
+}
+function saldoScPorItem(sc) {
+  const ordens = lista('oc').filter(o => !o.apagadoEm && o.situacao !== 'cancelada');
+  return (sc.itens || []).map(item => {
+    const pedido = Math.max(0, Number(item.qtd) || 0);
+    let comprado = 0, recebido = 0;
+    for (const o of ordens) {
+      for (const i of (o.itens || [])) {
+        const explicito = String(i.origemScId || '') === String(sc.id) && String(i.origemScItemId || '') === String(item.id);
+        const legadoExato = !i.origemScId && !i.origemScItemId && (o.scIds || []).some(id => String(id) === String(sc.id)) && i.id != null && item.id != null && String(i.id) === String(item.id);
+        if (!explicito && !legadoExato) continue;
+        if (!unidadesCompativeisSaldo(i.unid, item.unid)) continue;
+        const entregue = Math.max(0, jaRecebido(o, i.id));
+        recebido += entregue;
+        // Uma entrega encerrada com falta não promete mais o saldo restante.
+        comprado += o.situacao === 'entregue' ? entregue : Math.max(0, Number(i.qtd) || 0);
+      }
+    }
+    return { item, pedido, comprado, recebido, faltaComprar: Math.max(0, pedido - comprado), faltaReceber: Math.max(0, pedido - recebido) };
+  });
+}
+function itensPendentesSC(sc) {
+  return saldoScPorItem(sc).filter(s => s.faltaComprar > 0.001).map(s => ({ ...s.item, qtd: s.faltaComprar, origemScId: sc.id, origemScItemId: s.item.id }));
+}
+
 /* A situação da solicitação é CONSEQUÊNCIA do que existe ligado a ela — não um
    campo que alguém esqueceu de mexer. Sem isto, cancelar a cotação deixava a
    solicitação presa em "Em cotação" para sempre, e apagar a ordem de compra
    deixava em "Em compra" sem nenhuma compra. */
 function recalcularSC(scId, motivo) {
   const sc = achar('sc', scId);
-  if (!sc || sc.apagadoEm || ['recusada', 'atendida'].includes(sc.situacao)) return;
+  if (!sc || sc.apagadoEm || sc.situacao === 'recusada') return;
 
-  const ocs = (sc.ocIds || []).map((id) => achar('oc', id))
-    .filter((o) => o && !o.apagadoEm && o.situacao !== 'cancelada');
+  const ocs = lista('oc').filter(o => !o.apagadoEm && o.situacao !== 'cancelada' && ((sc.ocIds || []).includes(o.id) || (o.scIds || []).includes(sc.id) || (o.itens || []).some(i => i.origemScId === sc.id)));
   // 'aprovada' entra na lista dos que NÃO seguram: a cotação aprovada já virou
   // ordem, seu papel acabou. Sem isso, cancelar a compra devolvia a solicitação
   // para "Em cotação" — e lá ela sumia da fila de quem decide, esperando uma
@@ -628,9 +676,11 @@ function recalcularSC(scId, motivo) {
     .filter((c) => c && !c.apagadoEm && !['cancelada', 'recusada', 'aprovada'].includes(c.situacao));
 
   let nova;
-  if (ocs.length) nova = ocs.every((o) => o.situacao === 'entregue') ? 'atendida' : 'em_compra';
+  const saldos = saldoScPorItem(sc);
+  if (saldos.length && saldos.every(s => s.faltaReceber <= 0.001)) nova = 'atendida';
+  else if (ocs.length) nova = 'em_compra';
   else if (cots.length) nova = 'em_cotacao';
-  else nova = sc.aprovadaEm || ['aprovada', 'em_cotacao', 'em_compra'].includes(sc.situacao) ? 'aprovada' : 'nova';
+  else nova = sc.aprovadaEm || ['aprovada', 'em_cotacao', 'em_compra', 'atendida'].includes(sc.situacao) ? 'aprovada' : 'nova';
 
   if (nova === sc.situacao) return;
   const n = Object.assign({}, sc, { situacao: nova });
@@ -648,6 +698,10 @@ function linhaTempo(historico) {
 /* ══════════════════════════════════════════════════════════════════════════
    ORDENS DE COMPRA
    ══════════════════════════════════════════════════════════════════════════ */
+function correspondeBuscaOC(o, busca) {
+  return chaveNome([o.codigo, o.fornecedor?.nome, o.fornecedor?.cnpj, o.obra || nomeObra(o.obraId), o.os?.numero, o.os?.cliente, ...(o.itens || []).map(i => i.descricao)].join(' ')).includes(chaveNome(busca));
+}
+
 TELAS.compras = function (el, args) {
   if (args[0] === 'nova') return editorOC(el, null, args[1]);
   if (args[0] && args[1] === 'editar') return editorOC(el, args[0]);
@@ -659,7 +713,7 @@ TELAS.compras = function (el, args) {
   const filtradas = todas.filter((o) =>
     (!filtro.periodo || noPeriodo(o, filtro.periodo)) &&
     (!filtro.situacao || o.situacao === filtro.situacao) &&
-    (!filtro.busca || JSON.stringify(o).toLowerCase().includes(filtro.busca.toLowerCase())));
+    correspondeBuscaOC(o, filtro.busca));
   const somaAberta = todas.filter((o) => ['emitida', 'enviada', 'confirmada', 'transito', 'parcial'].includes(o.situacao))
     .reduce((s, o) => s + (Number(o.totalLiquido) || 0), 0);
 
@@ -669,12 +723,14 @@ TELAS.compras = function (el, args) {
   el.innerHTML =
     (filtro.periodo ? '<div class="aviso info">Ordens de ' + esc(rotuloPeriodo(filtro.periodo)) + ' <button class="btn" id="limparPeriodoOC">Ver todos os períodos</button></div>' : '') +
     '<div class="filtros">' +
-      '<input type="search" id="oBusca" placeholder="Buscar fornecedor, material, nº…" value="' + esc(filtro.busca) + '">' +
-      '<select id="oSit"><option value="">Todas as situações</option>' +
+      campo('Buscar ordem, fornecedor, material ou O.S.', '<input type="search" id="oBusca" placeholder="Ex.: OC-0046, Matão, ACM…" value="' + esc(filtro.busca) + '">') +
+      campo('Situação da ordem', '<select id="oSit"><option value="">Todas as situações</option>' +
         ['rascunho', 'emitida', 'enviada', 'confirmada', 'transito', 'parcial', 'entregue', 'cancelada'].map((s) =>
           '<option value="' + s + '"' + (filtro.situacao === s ? ' selected' : '') + '>' + esc(SITUACOES[s].txt) + '</option>').join('') +
-      '</select>' +
+      '</select>') +
+      '<button class="btn" id="limparFiltrosOC">Limpar filtros</button>' +
     '</div>' +
+    '<p class="legenda" role="status">' + filtradas.length + ' de ' + todas.length + ' ordem(ns)' + (filtro.periodo ? ' · período selecionado' : ' · todos os períodos') + '</p>' +
     '<div class="cartao">' +
       (filtradas.length ?
         '<div class="tabela-rolagem"><table><thead><tr><th>Nº</th><th>Fornecedor</th><th>Destino</th>' +
@@ -683,7 +739,7 @@ TELAS.compras = function (el, args) {
           const d = o.entregaPrevista ? diasAte(o.entregaPrevista) : null;
           const atraso = d != null && d < 0 && !['entregue', 'cancelada'].includes(o.situacao);
           return '<tr class="clicavel" data-id="' + esc(o.id) + '">' +
-            '<td><b>' + esc(o.codigo || '—') + '</b>' + (o._pendente ? ' <span class="pendente">enviando…</span>' : '') + '</td>' +
+            '<td><a class="cot-codigo" href="#/compras/' + esc(o.id) + '">' + esc(o.codigo || 'Abrir ordem') + '</a>' + (o._pendente ? ' <span class="pendente">enviando…</span>' : '') + '</td>' +
             '<td>' + esc((o.fornecedor || {}).nome || '—') + '</td>' +
             '<td>' + esc(o.obra || nomeObra(o.obraId)) + '</td>' +
             '<td class="num">' + fmt.brl(o.totalLiquido) + '</td>' +
@@ -691,10 +747,12 @@ TELAS.compras = function (el, args) {
             '<td>' + (o.entregaPrevista ? fmt.data(o.entregaPrevista) +
               (atraso ? ' <span class="etiqueta et-vencido">atrasada</span>' : '') : '—') + '</td></tr>';
         }).join('') + '</tbody></table></div>'
-        : vazio('🧾', 'Nenhuma ordem de compra', 'Crie a primeira a partir de uma solicitação aprovada.')) +
+        : vazio('🧾', todas.length ? 'Nenhuma ordem neste filtro' : 'Nenhuma ordem de compra', todas.length ? 'Ajuste a busca ou use Limpar filtros para ver todas.' : 'Crie a primeira a partir de uma solicitação aprovada.')) +
     '</div>';
 
-  el.querySelectorAll('tr[data-id]').forEach((tr) => tr.addEventListener('click', () => irPara('compras/' + tr.dataset.id)));
+  ligarRotulosRede(el);
+  el.querySelectorAll('tr[data-id]').forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('a')) irPara('compras/' + tr.dataset.id); }));
+  el.querySelector('#limparFiltrosOC').onclick = () => { S.filtroOC = { situacao: '', busca: '' }; render(); };
   document.getElementById('oSit').addEventListener('change', (e) => { filtro.situacao = e.target.value; render(); });
   let t;
   document.getElementById('oBusca').addEventListener('input', (e) => {
@@ -740,10 +798,15 @@ function editorOC(el, id, scId) {
     modalidade: 'CIF',
     notaFiscalObrigatoria: true,
     situacao: 'rascunho',
-    itens: sc ? (sc.itens || []).map((i) => ({ id: i.id, materialId:i.materialId||'', descricao: i.descricao, unid: i.unid, qtd: i.qtd, preco: 0 })) : [],
+    itens: sc ? itensPendentesSC(sc).map(i => ({ ...i, preco: 0 })) : [],
     scIds: sc ? [sc.id] : [],
+    os: sc?.os ? { ...sc.os } : undefined,
     frete: 0, seguro: 0, desconto: 0, temDifal: false, difalValor: 0
   };
+  if (!existente && sc && !oc.itens.length) {
+    S.formAberto = false; cabecalho('Itens já comprados', 'Solicitação ' + (sc.codigo || ''), '<a class="btn" href="#/solicitacoes/' + esc(sc.id) + '">Ver solicitação</a>');
+    el.innerHTML = '<div class="aviso info">Todos os itens desta solicitação já estão em compras válidas. Acompanhe as entregas ou revise as compras existentes antes de comprar novamente.</div>'; return;
+  }
   if (!oc.itens.length) oc.itens = [{}, {}];
   S.ocEditando = oc;
 
@@ -776,7 +839,7 @@ function editorOC(el, id, scId) {
     '<button class="btn" id="cancelarOC">Cancelar</button><button class="btn primario" id="salvarOC">Salvar</button>');
 
   el.innerHTML =
-    '<div id="fOC">' +
+    '<div id="fOC"><div id="ocErro" class="aviso ruim" role="alert" tabindex="-1" hidden></div>' +
       '<div class="cartao">' +
         '<div class="rede-titulo"><h3>🏢 Fornecedor do Mubisys</h3>'+(ehDirecao()?'<button class="btn" id="ocFornecedorMubi" type="button">Buscar no Mubisys</button>':'')+'</div><p class="legenda">Selecione um fornecedor trazido do ERP. Cadastro e correções cadastrais são feitos no Mubisys.</p>' +
         (sugerido
@@ -784,9 +847,12 @@ function editorOC(el, id, scId) {
             '</b> — ' + esc(sugerido.motivos.join(' · ').replace(/<[^>]+>/g, '')) + '. Troque se não for esse.</div>'
           : '') +
         '<div class="linha">' +
+          campo('Buscar fornecedor por nome ou CNPJ', '<input id="ocBuscaFornecedor" type="search" placeholder="Digite o nome ou parte do CNPJ">') +
           campo('Fornecedor importado do Mubisys', '<select id="selForn"><option value="">Selecione um fornecedor do Mubisys</option>'+(existente?'<option value="__historico__" selected>Manter fornecedor desta ordem · '+esc(f.nome||'registro original')+'</option>':'')+
             fornecedoresMubiCadastrados().map((x) => '<option value="' + esc(x.id) + '"' + (!existente&&oc.fornecedorId === x.id ? ' selected' : '') + '>' +
-              esc(x.nome) + '</option>').join('') + '</select>') +
+              esc(x.nome + ' · ' + (fmt.doc(x.cnpj) || 'CNPJ não informado')) + '</option>').join('') + '</select>') +
+        '</div><p id="ocFornecedorConta" class="legenda" role="status"></p><div id="ocFornecedorResumo" class="aviso info"></div>' +
+        '<details class="oc-cadastro-fornecedor"><summary>Ver cadastro do fornecedor</summary><div class="linha">' +
           campo('Nome / razão social', entrada('fornecedor.nome', f.nome,{somenteLeitura:true})) +
           campo('CNPJ', entrada('fornecedor.cnpj', f.cnpj, { inputmode: 'numeric',somenteLeitura:true })) +
         '</div>' +
@@ -798,7 +864,7 @@ function editorOC(el, id, scId) {
         '<div class="linha">' +
           campo('Endereço', entrada('fornecedor.endereco', f.endereco,{somenteLeitura:true})) +
           campo('Inscrição estadual', entrada('fornecedor.ie', f.ie,{somenteLeitura:true})) +
-        '</div>' +
+        '</div></details>' +
       '</div>' +
 
       '<div class="cartao">' +
@@ -906,20 +972,53 @@ function editorOC(el, id, scId) {
     if (cx) cx.hidden = !chkDifal.checked;
     recalcularOC();
   });
-  function preencherFornecedorOC(){
-    const valor=document.getElementById('selForn').value,x=valor==='__historico__'?fornecedorOriginal:achar('forn',valor);
-    const set=(n,v)=>{const c=el.querySelector('[data-campo="fornecedor.'+n+'"]');if(c)c.value=v||'';};
-    ['nome','cnpj','ie','endereco','contato','telefone','email'].forEach(n=>set(n,x?.[n]));
-    const banco=el.querySelector('[data-campo=dadosBancarios]');if(banco&&!banco.value&&x?.banco)banco.value=x.banco;
+  const seletorFornecedor = document.getElementById('selForn');
+  const buscaFornecedor = el.querySelector('#ocBuscaFornecedor');
+  function resumoFornecedorOC() {
+    const selecionado = seletorFornecedor.value;
+    const x = selecionado === '__historico__' ? fornecedorOriginal : achar('forn', selecionado);
+    el.querySelector('#ocFornecedorResumo').textContent = x
+      ? [x.nome, fmt.doc(x.cnpj) || 'CNPJ não informado', 'Dados de cadastro somente leitura'].join(' · ')
+      : 'Escolha um fornecedor para esta compra.';
   }
-  document.getElementById('selForn').addEventListener('change',preencherFornecedorOC);
-  const buscarForn=el.querySelector('#ocFornecedorMubi');if(buscarForn)buscarForn.onclick=()=>buscarFornecedorMubiOC(x=>{const sel=document.getElementById('selForn');if(!sel)return;if(![...sel.options].some(o=>o.value===x.id))sel.add(new Option(x.nome,x.id));sel.value=x.id;preencherFornecedorOC();});
+  function filtrarFornecedoresOC() {
+    const valor = seletorFornecedor.value;
+    const todos = fornecedoresMubiCadastrados();
+    const termo = chaveNome(buscaFornecedor.value), digitos = buscaFornecedor.value.replace(/\D/g, '');
+    const filtrados = todos.filter(x => chaveNome(x.nome).includes(termo) || (digitos && /^[-.\/\s\d]+$/.test(buscaFornecedor.value) && String(x.cnpj || '').replace(/\D/g, '').includes(digitos)));
+    // A pesquisa não troca o fornecedor que o operador já escolheu.
+    const selecionado = todos.find(x => x.id === valor);
+    const opcoes = selecionado && !filtrados.includes(selecionado) ? [selecionado, ...filtrados] : filtrados;
+    seletorFornecedor.innerHTML = '<option value="">Selecione um fornecedor do Mubisys</option>' +
+      (existente ? '<option value="__historico__">Manter fornecedor desta ordem · ' + esc(fornecedorOriginal.nome || 'registro original') + '</option>' : '') +
+      opcoes.map(x => '<option value="' + esc(x.id) + '">' + esc(x.nome + ' · ' + (fmt.doc(x.cnpj) || 'CNPJ não informado')) + '</option>').join('');
+    seletorFornecedor.value = valor;
+    el.querySelector('#ocFornecedorConta').textContent = filtrados.length + ' fornecedor(es) encontrado(s).' + (!filtrados.length
+      ? (ehDirecao() ? ' Use Buscar no Mubisys para consultar outros cadastros.' : ' Peça à direção para importar o cadastro do Mubisys.') : '');
+  }
+  function preencherFornecedorOC() {
+    const valor = seletorFornecedor.value, x = valor === '__historico__' ? fornecedorOriginal : achar('forn', valor);
+    const set = (n, v) => { const c = el.querySelector('[data-campo="fornecedor.' + n + '"]'); if (c) c.value = v || ''; };
+    ['nome','cnpj','ie','endereco','contato','telefone','email'].forEach(n => set(n, x?.[n]));
+    // Nunca herdar PIX/conta do fornecedor anterior ao trocar o cadastro.
+    const banco = el.querySelector('[data-campo=dadosBancarios]');
+    if (banco) banco.value = valor === '__historico__' ? (oc.dadosBancarios || '') : (x?.banco || '');
+    resumoFornecedorOC();
+  }
+  seletorFornecedor.addEventListener('change', preencherFornecedorOC);
+  buscaFornecedor.addEventListener('input', filtrarFornecedoresOC);
+  filtrarFornecedoresOC(); resumoFornecedorOC();
+  const buscarForn = el.querySelector('#ocFornecedorMubi');
+  if (buscarForn) buscarForn.onclick = () => buscarFornecedorMubiOC(x => {
+    buscaFornecedor.value = ''; filtrarFornecedoresOC(); seletorFornecedor.value = x.id;
+    preencherFornecedorOC();
+    document.getElementById('fOC')?.dispatchEvent(new Event('change', { bubbles: true }));
+  });
   ligarRotulosRede(el);
   document.getElementById('puxarSC').addEventListener('click', () => puxarDeSolicitacoes(caixa, ligar));
   recalcularOC();
 
   document.getElementById('cancelarOC').addEventListener('click', () => {
-    S.formAberto = false;
     irPara(existente ? 'compras/' + existente.id : 'compras');
   });
 
@@ -955,12 +1054,29 @@ function editorOC(el, id, scId) {
     }
   });
 
-  document.getElementById('salvarOC').addEventListener('click', () => {
+  const campoNumeroOS = el.querySelector('[data-campo="osNumero"]');
+  campoNumeroOS.addEventListener('input', () => {
+    const n = campoNumeroOS.value.replace(/\D/g, '');
+    document.getElementById('ocOsInfo').innerHTML = n && String(_osOC?.numero || '') !== n
+      ? '<div class="aviso info">O.S. ainda não vinculada. Use Buscar O.S. para conferir antes de salvar.</div>' : '';
+  });
+  const erroOC = (mensagem, campo) => {
+    const aviso = el.querySelector('#ocErro'); aviso.textContent = mensagem; aviso.hidden = false;
+    (campo || aviso).focus();
+  };
+  document.getElementById('salvarOC').addEventListener('click', async () => {
+    const botaoSalvar = document.getElementById('salvarOC');
+    if (botaoSalvar.disabled) return;
+    botaoSalvar.disabled = true;
+    try {
+    el.querySelector('#ocErro').hidden = true;
     const d = lerCampos(document.getElementById('fOC'));
     const itens = lerItens(caixa, true);
-    if (!itens.length) { toast('Inclua pelo menos um item', 'ruim'); return; }
+    if (!itens.length) { erroOC('Inclua pelo menos um item com descrição.', caixa.querySelector('[data-i=descricao]')); return; }
+    const invalido = itens.find(i => !Number.isFinite(i.qtd) || i.qtd <= 0 || !Number.isFinite(i.preco) || i.preco < 0);
+    if (invalido) { erroOC('Confira quantidade e preço de ' + invalido.descricao + ': a quantidade deve ser maior que zero e o preço não pode ser negativo.'); return; }
     const fornecedorIdSelecionado=document.getElementById('selForn').value,manterHistorico=!!existente&&fornecedorIdSelecionado==='__historico__',fornecedorAtual=achar('forn',fornecedorIdSelecionado);
-    if(!manterHistorico&&!fornecedorMubiAtivo(fornecedorAtual)){toast('Selecione um fornecedor do Mubisys. Use a busca para trazer o cadastro.','ruim');return;}
+    if(!manterHistorico&&!fornecedorMubiAtivo(fornecedorAtual)){erroOC('Selecione um fornecedor do Mubisys. ' + (ehDirecao() ? 'Use Buscar no Mubisys se ainda não estiver na lista.' : 'Peça à direção para importar o cadastro se não estiver na lista.'), seletorFornecedor);return;}
     d.fornecedor=manterHistorico?fornecedorOriginal:dadosFornecedorOC(fornecedorAtual);
 
     const novo = Object.assign({}, oc, d, {
@@ -984,7 +1100,12 @@ function editorOC(el, id, scId) {
     if (!numDigitado) delete novo.os;
     else if (_osOC && String(_osOC.numero) === numDigitado) novo.os = _osOC;
     else if (oc.os && String(oc.os.numero) === numDigitado) novo.os = oc.os;
-    else { delete novo.os; osNaoConferida = true; }
+    else {
+      if (!await confirmar('A O.S. ' + numDigitado + ' ainda não foi conferida. Você pode voltar para buscar a O.S. ou salvar esta compra sem vínculo com ela.', { titulo: 'O.S. ainda não vinculada', cancelar: 'Voltar e conferir O.S.', ok: 'Salvar sem vínculo' })) {
+        campoNumeroOS.focus(); return;
+      }
+      delete novo.os; osNaoConferida = true;
+    }
     const t = totaisOC(novo);
     novo.total = t.total;
     novo.totalLiquido = t.totalLiquido;
@@ -1011,10 +1132,14 @@ function editorOC(el, id, scId) {
     }
 
     // Solicitações ligadas: a de origem mais as que tiveram itens puxados.
-    const ligadas = Array.from(new Set([...(oc.scIds || []), ...(sc ? [sc.id] : []), ...(S.scPuxadas || [])]));
+    const ligadas = Array.from(new Set([...(oc.scIds || []), ...(sc ? [sc.id] : []), ...(S.scPuxadas || []), ...itens.map(i => i.origemScId).filter(Boolean)]));
     novo.scIds = ligadas;
 
     const salvo = salvar('oc', novo);
+    // Se atualizar uma solicitação vinculada falhar depois, a nova tentativa
+    // edita esta mesma OC já persistida em vez de criar uma segunda compra.
+    oc.id = salvo.id;
+    if (salvo.codigo) oc.codigo = salvo.codigo;
 
     for (const sid of ligadas) {
       const s = achar('sc', sid);
@@ -1031,16 +1156,19 @@ function editorOC(el, id, scId) {
       salvar('sc', nsc);
     }
     S.scPuxadas = [];
+    if (typeof limparRascunhoEdicao === 'function') limparRascunhoEdicao();
     S.formAberto = false;
     irPara('compras/' + salvo.id);
     // O número digitado e não conferido não vira vínculo — mas some em
     // silêncio se ninguém avisar, e a compra ficaria fora do custo daquele
     // trabalho sem nenhum sinal na tela.
     if (osNaoConferida) {
-      toast('Ordem salva, mas a O.S. ' + numDigitado + ' não foi conferida — aperte "Buscar O.S." para ligar a compra a ela', 'ruim');
+      toast((salvo._pendente ? 'Ordem guardada; aguardando sincronização. ' : 'Ordem salva. ') + 'Sem vínculo com a O.S., conforme sua escolha.', salvo._pendente ? 'info' : 'bom');
     } else {
-      toast('Ordem de compra salva', 'bom');
+      toast(salvo._pendente ? 'Ordem guardada neste aparelho; aguardando sincronização.' : 'Ordem de compra salva', salvo._pendente ? 'info' : 'bom');
     }
+    } catch (e) { erroOC(e.message || 'Não foi possível salvar. Seu formulário foi preservado.'); }
+    finally { botaoSalvar.disabled = false; }
   });
 }
 
@@ -1068,7 +1196,7 @@ function recalcularOC() {
 }
 
 function puxarDeSolicitacoes(caixa, ligar) {
-  const aprovadas = lista('sc').filter((s) => ['nova', 'aprovada', 'em_cotacao', 'em_compra'].includes(s.situacao));
+  const aprovadas = lista('sc').filter((s) => ['nova', 'aprovada', 'em_cotacao', 'em_compra'].includes(s.situacao) && itensPendentesSC(s).length);
   if (!aprovadas.length) { toast('Nenhuma solicitação em aberto', 'ruim'); return; }
   abrirModal({
     titulo: 'Puxar itens de solicitações',
@@ -1076,7 +1204,7 @@ function puxarDeSolicitacoes(caixa, ligar) {
     corpo: aprovadas.map((s) =>
       '<div class="cartao" style="box-shadow:none;margin-bottom:10px">' +
         '<b>' + esc(s.codigo) + '</b> · ' + esc((s.solicitante || {}).nome || '') + ' · ' + esc(s.setor || '') + ' ' + etiqueta(s.situacao) +
-        (s.itens || []).map((i, n) => {
+        itensPendentesSC(s).map((i, n) => {
           // Já entrou em alguma ordem viva? Marca, senão o mesmo material é
           // comprado duas vezes por quem não lembra o que já pediu.
           const jaEm = (s.ocIds || []).map((oid) => achar('oc', oid))
@@ -1084,7 +1212,7 @@ function puxarDeSolicitacoes(caixa, ligar) {
               (oc.itens || []).some((x) => x.descricao === i.descricao))
             .map((oc) => oc.codigo || '(sem número)');
           return '<label class="arquivo-solto" style="cursor:pointer' + (jaEm.length ? ';opacity:.6' : '') + '">' +
-            '<input type="checkbox" data-sc="' + esc(s.id) + '" data-idx="' + n + '" style="width:auto;min-height:auto">' +
+            '<input type="checkbox" data-sc="' + esc(s.id) + '" data-scitem="' + esc(i.id) + '" style="width:auto;min-height:auto">' +
             '<div><div class="nome">' + esc(i.descricao) +
               (jaEm.length ? ' <span class="etiqueta et-comprado">já em ' + esc(jaEm.join(', ')) + '</span>' : '') + '</div>' +
             '<div class="meta">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</div></div></label>';
@@ -1097,15 +1225,17 @@ function puxarDeSolicitacoes(caixa, ligar) {
         if (!marcados.length) { toast('Marque pelo menos um item', 'ruim'); return; }
         for (const c of marcados) {
           const s = achar('sc', c.dataset.sc);
-          const it = (s.itens || [])[Number(c.dataset.idx)];
+          const it = s && itensPendentesSC(s).find(i => String(i.id) === c.dataset.scitem);
           if (!it) continue;
-          caixa.insertAdjacentHTML('beforeend', linhaItem({ materialId:it.materialId||'', descricao: it.descricao, unid: it.unid, qtd: it.qtd }, true));
+          if (Array.from(caixa.querySelectorAll('[data-item]')).some(l => l.dataset.origemScId === String(s.id) && l.dataset.origemScItemId === String(it.id))) { toast('Este item já está no formulário: ' + it.descricao, 'info'); continue; }
+          caixa.insertAdjacentHTML('beforeend', linhaItem({ origemScId:s.id, origemScItemId:it.id, materialId:it.materialId||'', descricao: it.descricao, unid: it.unid, qtd: it.qtd }, true));
           ligar(caixa.lastElementChild);
         }
         // Guarda a ligação para marcar as solicitações como atendidas ao salvar.
         S.scPuxadas = Array.from(new Set([...(S.scPuxadas || []), ...marcados.map((c) => c.dataset.sc)]));
         fecharEste(fundo);
         recalcularOC();
+        document.getElementById('fOC')?.dispatchEvent(new Event('change', { bubbles: true }));
         toast(marcados.length + ' item(ns) trazido(s)', 'bom');
       } }
     ]
@@ -1128,7 +1258,7 @@ function telaOC(el, id) {
     (podeEditar ? '<a class="btn" href="#/compras/' + esc(o.id) + '/editar">Editar</a>' : '') +
     '<button class="btn" id="ocPdf">📄 PDF</button>' +
     '<button class="btn zap" id="ocZap"' + (pronta ? '' : ' disabled title="aguardando o número do servidor"') +
-    '>Enviar no WhatsApp</button>');
+    '>Preparar WhatsApp</button>');
 
   el.innerHTML =
     '<div class="grade g2">' +
@@ -1265,9 +1395,9 @@ function telaOC(el, id) {
   // em CACHE: telaOC roda inteira a cada sincronização, e sem isso as fotos eram
   // baixadas de novo (parte por parte) e vazavam um objectURL por redesenho.
   (o.recebimentos || []).forEach((r) => {
-    const caixa = el.querySelector('[data-fotos="' + r.id + '"]');
+    const caixa = Array.from(el.querySelectorAll('[data-fotos]')).find(c => c.dataset.fotos === String(r.id));
     if (!caixa) return;
-    (r.fotos || []).forEach(async (fid) => {
+    (r.fotos || []).forEach(async (fid, indice) => {
       try {
         let url = CACHE_FOTOS.get(fid);
         if (!url) {
@@ -1278,8 +1408,11 @@ function telaOC(el, id) {
         if (!caixa.isConnected) return;   // a tela já mudou enquanto baixava
         const img = document.createElement('img');
         img.src = url;
-        img.addEventListener('click', () => window.open(url, '_blank'));
-        caixa.appendChild(img);
+        img.alt = 'Foto ' + (indice + 1) + ' do recebimento de ' + (o.codigo || 'ordem de compra');
+        const link = document.createElement('a');
+        link.href = url; link.target = '_blank'; link.rel = 'noopener';
+        link.title = 'Abrir foto em nova aba'; link.appendChild(img);
+        caixa.appendChild(link);
       } catch { /* foto ainda subindo */ }
     });
   });
@@ -1694,7 +1827,7 @@ async function avisarChegadaZap(o) {
 
 // Cobrança de atraso: vai para o WhatsApp do fornecedor com o resumo do pedido
 // e a data combinada — o texto já sai educado e completo.
-function cobrarAtrasoZap(o) {
+async function cobrarAtrasoZap(o) {
   const tel = String(((o.fornecedor || {}).whatsapp) || ((o.fornecedor || {}).telefone) || '').replace(/\D/g, '');
   const dias = Math.max(1, Math.round((Date.now() - new Date(o.entregaPrevista + 'T12:00:00').getTime()) / 86400000));
   const texto = 'Olá! Sobre a ordem de compra *' + (o.codigo || '') + '* da ' +
@@ -1705,9 +1838,10 @@ function cobrarAtrasoZap(o) {
     ((o.itens || []).length > 5 ? '\n… e mais ' + ((o.itens || []).length - 5) + ' item(ns)' : '') +
     '\n\nObrigado!';
   const base = tel ? 'https://wa.me/' + (tel.length <= 11 ? '55' + tel : tel) : 'https://wa.me/';
-  window.open(base + '?text=' + encodeURIComponent(texto), '_blank');
-  const n = Object.assign({}, o);
-  n.historico = historiar(o, 'Cobrança de atraso enviada ao fornecedor (' + dias + ' dia(s) além do combinado)');
+  if (!await confirmarEnvioWhats(base + '?text=' + encodeURIComponent(texto))) return;
+  const atual = achar('oc', o.id) || o;
+  const n = Object.assign({}, atual);
+  n.historico = historiar(atual, 'Envio da cobrança confirmado pelo operador (' + dias + ' dia(s) além do combinado)');
   salvar('oc', n);
 }
 
@@ -1753,18 +1887,20 @@ async function avancarOC(o, destino) {
   };
   const extra = {};
   if (destino === 'confirmada' && !o.entregaPrevista) {
-    const d = await perguntarData('Data prevista de entrega', { titulo: 'Entrega prevista' });
+    const d = await perguntarData('Data prevista de entrega', { titulo: 'Entrega prevista', pular: 'Confirmar sem previsão' });
+    if (d === null) return;
     if (d) extra.entregaPrevista = d;
   }
   if (destino === 'transito') {
-    const nf = await perguntar('Número da nota fiscal (se já tiver)', { titulo: 'A caminho', ok: 'Salvar' });
+    const nf = await perguntar('Número da nota fiscal (opcional; deixe vazio se ainda não tiver)', { titulo: 'Confirmar saída para entrega', ok: 'Confirmar saída' });
+    if (nf === null) return;
     if (nf) extra.nf = nf;
   }
   const n = Object.assign({}, o, extra, { situacao: destino });
   n.historico = historiar(o, textos[destino] || destino);
-  salvar('oc', n);
+  const salvo = salvar('oc', n);
   render();
-  toast(textos[destino] || 'Atualizado', 'bom');
+  toast(salvo._pendente ? 'Alteração guardada; aguardando sincronização.' : (textos[destino] || 'Atualizado'), salvo._pendente ? 'info' : 'bom');
 }
 
 function normalizarData(s) {
@@ -1775,7 +1911,18 @@ function normalizarData(s) {
   return '';
 }
 
-function enviarOCWhats(o, link) {
+// Abrir o aplicativo apenas prepara a mensagem. O envio real depende do operador.
+async function confirmarEnvioWhats(url) {
+  const janela = window.open(url, '_blank');
+  if (!janela) {
+    toast('O navegador bloqueou o WhatsApp. Permita a abertura e tente novamente; nenhum envio foi registrado.', 'ruim');
+    return false;
+  }
+  try { janela.opener = null; } catch { /* outro aplicativo pode assumir a janela */ }
+  return confirmar('A mensagem foi preparada no WhatsApp. Envie por lá e confirme aqui somente depois de enviar. Abrir a janela não confirma o envio.', { titulo: 'Você enviou a mensagem?', ok: 'Confirmei o envio', cancelar: 'Ainda não enviei' });
+}
+
+async function enviarOCWhats(o, link) {
   const linhas = [
     '*' + ((S.cfg.empresa || {}).nomeCurto || 'Impresilk') + '* — Ordem de Compra *' + (o.codigo || '') + '*',
     'Destino: ' + (o.obra || ''),
@@ -1791,16 +1938,15 @@ function enviarOCWhats(o, link) {
     '',
     'Favor confirmar o recebimento deste pedido.'
   ].filter((x) => x !== '');
-  window.open(linkWhats((o.fornecedor || {}).telefone, linhas.join('\n')), '_blank');
-  if (o.situacao === 'emitida' || o.situacao === 'rascunho') {
-    const n = Object.assign({}, o, { situacao: 'enviada' });
-    // Rascunho que vai direto pro WhatsApp registra as DUAS etapas: sem isso a
-    // emissão ficava sem linha nenhuma no histórico e o botão sumia para sempre.
-    n.historico = o.situacao === 'rascunho'
-      ? historiar(Object.assign({}, o, { historico: historiar(o, 'Ordem emitida') }), 'Enviada ao fornecedor pelo WhatsApp')
-      : historiar(o, 'Enviada ao fornecedor pelo WhatsApp');
+  if (!await confirmarEnvioWhats(linkWhats((o.fornecedor || {}).telefone, linhas.join('\n')))) return;
+  const atual = achar('oc', o.id) || o;
+  if (atual.situacao === 'emitida' || atual.situacao === 'rascunho') {
+    const n = Object.assign({}, atual, { situacao: 'enviada' });
+    n.historico = atual.situacao === 'rascunho'
+      ? historiar(Object.assign({}, atual, { historico: historiar(atual, 'Ordem emitida') }), 'Envio pelo WhatsApp confirmado pelo operador')
+      : historiar(atual, 'Envio pelo WhatsApp confirmado pelo operador');
     salvar('oc', n);
-    setTimeout(render, 400);
+    render();
   }
 }
 
@@ -1855,14 +2001,16 @@ async function escolherCotacao(o, cid) {
    ══════════════════════════════════════════════════════════════════════════ */
 TELAS.recebimento = function (el) {
   const esperando = lista('oc').filter((o) => SIT_ESPERANDO.includes(o.situacao));
+  const filtroRecebimento = S.filtroRecebimento || { busca: '', prazo: '' }; S.filtroRecebimento = filtroRecebimento;
   cabecalho('Recebimento na empresa', esperando.length + ' compra(s) para chegar', '');
 
   el.innerHTML =
     '<div class="aviso info">Confira o material com o caminhão ainda na empresa. Tire foto da nota e da carga: ' +
     'é a sua prova se faltar peça ou vier errado.</div>' +
+    '<div class="filtros">' + campo('Buscar recebimento por ordem, fornecedor ou material', '<input id="recBusca" type="search" placeholder="Ex.: OC-0046, fornecedor, material" value="' + esc(filtroRecebimento.busca) + '">') + campo('Prazo de entrega', '<select id="recPrazo">' + [['','Todas as entregas'],['atrasadas','Atrasadas'],['hoje','Hoje'],['sem_previsao','Sem previsão']].map(([v,t]) => '<option value="' + v + '"' + (filtroRecebimento.prazo === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>') + '<button id="recLimparBusca" class="btn">Limpar filtros</button></div><p class="legenda" id="recContagem" role="status"></p>' +
     (esperando.length ? esperando.map((o) => {
       const d = o.entregaPrevista ? diasAte(o.entregaPrevista) : null;
-      return '<div class="cartao">' +
+      return '<div class="cartao" data-recebimento-oc="' + esc(o.id) + '">' +
         '<div class="barra-acoes" style="justify-content:space-between">' +
           '<div><h3 style="margin:0">' + esc(o.codigo || '—') + ' · ' + esc((o.fornecedor || {}).nome || '') + '</h3>' +
           '<div class="legenda">' + esc(o.obra || nomeObra(o.obraId)) + ' · ' + fmt.brl(o.totalLiquido) + '</div></div>' +
@@ -1892,6 +2040,21 @@ TELAS.recebimento = function (el) {
     }).join('')
       : '<div class="cartao">' + vazio('📭', 'Nada para receber', 'Quando uma compra for confirmada ela aparece aqui.') + '</div>');
 
+  function filtrarRecebimento() {
+    let quantidade = 0;
+    el.querySelectorAll('[data-recebimento-oc]').forEach(c => {
+      const o = esperando.find(x => x.id === c.dataset.recebimentoOc);
+      const dias = o.entregaPrevista ? diasAte(o.entregaPrevista) : null;
+      const noPrazo = !filtroRecebimento.prazo || (filtroRecebimento.prazo === 'hoje' && dias === 0) || (filtroRecebimento.prazo === 'atrasadas' && dias != null && dias < 0) || (filtroRecebimento.prazo === 'sem_previsao' && dias == null);
+      c.hidden = !correspondeBuscaOC(o, filtroRecebimento.busca) || !noPrazo;
+      if (!c.hidden) quantidade++;
+    });
+    el.querySelector('#recContagem').textContent = quantidade + ' de ' + esperando.length + ' recebimento(s)' + (!quantidade && esperando.length ? '. Ajuste ou limpe a busca.' : '.');
+  }
+  el.querySelector('#recBusca').oninput = e => { filtroRecebimento.busca = e.target.value; filtrarRecebimento(); };
+  el.querySelector('#recPrazo').onchange = e => { filtroRecebimento.prazo = e.target.value; filtrarRecebimento(); };
+  el.querySelector('#recLimparBusca').onclick = () => { filtroRecebimento.busca = ''; filtroRecebimento.prazo = ''; el.querySelector('#recBusca').value = ''; el.querySelector('#recPrazo').value = ''; filtrarRecebimento(); };
+  filtrarRecebimento(); ligarRotulosRede(el);
   el.querySelectorAll('[data-receber]').forEach((b) => b.addEventListener('click', () => {
     const oc = achar('oc', b.dataset.receber);
     if (!oc) { toast('Esta ordem não existe mais — atualize a tela', 'ruim'); return; }
@@ -1915,9 +2078,23 @@ function jaRecebido(o, itemId) {
   }, 0);
 }
 
+function htmlItensRecebimento(o) {
+  return '<div class="recebimento-itens">' + (o.itens || []).map((i, indice) => {
+    const ja = jaRecebido(o, i.id), falta = Math.max(0, (Number(i.qtd) || 0) - ja);
+    const campoId = 'recQuantidade' + indice;
+    return '<article class="recebimento-item"><div class="recebimento-descricao"><strong>' + esc(i.descricao) + '</strong>' +
+      '<dl class="recebimento-saldos"><div><dt>Pedido</dt><dd>' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</dd></div>' +
+      '<div><dt>Já recebido</dt><dd>' + fmt.numero(ja) + '</dd></div>' +
+      '<div><dt>Saldo</dt><dd>' + fmt.numero(falta) + ' ' + esc(i.unid || '') + '</dd></div></dl></div>' +
+      '<div class="campo recebimento-quantidade"><label for="' + campoId + '">Chegou agora · ' + esc(i.unid || 'un') + '</label>' +
+      '<input id="' + campoId + '" type="text" inputmode="decimal" data-rec="' + esc(i.id) + '" data-saldo="' + falta + '" value="" placeholder="0" aria-label="Chegou agora: ' + esc(i.descricao) + '"></div></article>';
+  }).join('') + '</div>';
+}
+
 function telaReceberOC(o) {
   if (!o) return;
   const fotos = [];
+  let registrandoRecebimento = false;
   // Fotos que não subiram (obra sem sinal). Ficam marcadas na tela e o
   // recebimento avisa quantas faltam anexar.
   const fotosPendentes = [];
@@ -1930,17 +2107,10 @@ function telaReceberOC(o) {
     corpo:
       '<p class="legenda">Confira item por item. Se veio só uma parte, escreva o que chegou de verdade — o resto continua pendente.</p>' +
       '<div id="fRec">' +
-        '<table><thead><tr><th>Item</th><th class="num">Pedido</th><th class="num">Já recebido</th><th class="num">Chegou agora</th></tr></thead><tbody>' +
-        (o.itens || []).map((i) => {
-          const ja = jaRecebido(o, i.id);
-          const falta = Math.max(0, (Number(i.qtd) || 0) - ja);
-          return '<tr><td>' + esc(i.descricao) + '</td>' +
-            '<td class="num">' + fmt.numero(i.qtd) + ' ' + esc(i.unid || '') + '</td>' +
-            '<td class="num">' + fmt.numero(ja) + '</td>' +
-            '<td class="num"><input type="text" inputmode="decimal" data-rec="' + esc(i.id) + '" value="' +
-            esc(String(Math.round(falta * 1000) / 1000).replace('.', ',')) + '" style="max-width:110px"></td></tr>';
-        }).join('') +
-        '</tbody></table>' +
+        '<button type="button" class="btn" id="recPreencherSaldo">Preencher todo o saldo conferido</button>' +
+        '<p class="legenda" id="recResumo" role="status">Nenhum item preenchido. Informe somente o que chegou.</p>' +
+        htmlItensRecebimento(o) +
+        '<div id="recErro" class="aviso ruim" role="alert" hidden></div>' +
         '<div class="linha" style="margin-top:12px">' +
           campo('Nota fiscal nº', entrada('nf', o.nf || '')) +
           campo('Quem recebeu', entrada('por', S.quem)) +
@@ -1955,12 +2125,19 @@ function telaReceberOC(o) {
     acoes: [
       { texto: 'Voltar', aoClicar: () => fecharModal() },
       { texto: 'Confirmar recebimento', classe: 'verde', aoClicar: async (fundo) => {
+        if (registrandoRecebimento) return;
+        registrandoRecebimento = true;
+        try {
         const d = lerCampos(fundo.querySelector('#fRec'));
         const recebidos = Array.from(fundo.querySelectorAll('[data-rec]')).map((inp) => {
           const item = (o.itens || []).find((x) => x.id === inp.dataset.rec) || {};
           return { itemId: inp.dataset.rec, descricao: item.descricao, unid: item.unid, qtd: numeroBR(inp.value) };
         }).filter((x) => x.qtd > 0);
-        if (!recebidos.length) { toast('Escreva o que chegou', 'ruim'); return; }
+        const invalidos = Array.from(fundo.querySelectorAll('[data-rec]')).filter(inp => inp.value.trim() && (!Number.isFinite(numeroBR(inp.value)) || numeroBR(inp.value) < 0));
+        const erro = fundo.querySelector('#recErro');
+        erro.hidden = true;
+        if (invalidos.length) { erro.textContent = 'As quantidades não podem ser negativas ou inválidas.'; erro.hidden = false; invalidos[0].focus(); return; }
+        if (!recebidos.length) { erro.textContent = 'Informe ao menos uma quantidade que chegou. Nenhum recebimento foi registrado.'; erro.hidden = false; fundo.querySelector('[data-rec]')?.focus(); return; }
 
         // Chegou mais do que foi pedido? Pode ser erro de digitação — confirma.
         const excesso = recebidos.filter((r) => {
@@ -2004,19 +2181,40 @@ function telaReceberOC(o) {
         n.historico = historiar(base, (completo ? 'Recebimento completo' : 'Recebimento parcial') +
           ' — ' + recebidos.map((r) => r.descricao + ': ' + fmt.numero(r.qtd)).join(', ') + (d.obs ? ' (' + d.obs + ')' : '') +
           (fotosPendentes.length ? ' · ' + fotosPendentes.length + ' foto(s) ainda não subiram' : ''));
-        salvar('oc', n);
+        const salvo = salvar('oc', n);
         // Quem fecha a solicitação é o SERVIDOR (nucleo.mjs, ao juntar os
         // recebimentos dos dois aparelhos). Fazer isso aqui também era
         // redundante E era o que fazia o servidor recusar o pacote inteiro do
         // pessoal da empresa, levando o recebimento junto.
         fecharEste(fundo); render();
-        if (cancelada) toast('Atenção: esta compra foi CANCELADA no escritório. A entrega ficou registrada.', 'ruim');
-        else if (fotosPendentes.length) toast('Recebimento salvo, mas ' + fotosPendentes.length +
+        const estadoGravacao = salvo._pendente ? 'Recebimento guardado; aguardando sincronização.' : (completo ? 'Recebimento completo registrado.' : 'Recebimento parcial registrado.');
+        if (cancelada) toast('Atenção: esta compra foi CANCELADA no escritório. ' + estadoGravacao, 'ruim');
+        else if (fotosPendentes.length) toast(estadoGravacao + ' ' + fotosPendentes.length +
           ' foto(s) não subiram — anexe quando a internet voltar', 'ruim');
-        else toast(completo ? 'Recebimento completo registrado' : 'Recebimento parcial registrado', 'bom');
+        else toast(estadoGravacao, salvo._pendente ? 'info' : 'bom');
+        } catch (e) {
+          const erro = fundo.querySelector('#recErro'); erro.textContent = e.message || 'Não foi possível registrar. Os dados preenchidos foram preservados.'; erro.hidden = false;
+        } finally { registrandoRecebimento = false; }
       } }
     ]
   });
+
+  const raizRecebimento = document.getElementById('fRec');
+  ligarRotulosRede(raizRecebimento);
+  function resumirRecebimento() {
+    const campos = Array.from(raizRecebimento.querySelectorAll('[data-rec]'));
+    const preenchidos = campos.filter(c => numeroBR(c.value) > 0);
+    const pendentes = campos.filter(c => numeroBR(c.value) < Number(c.dataset.saldo));
+    document.getElementById('recResumo').textContent = preenchidos.length
+      ? preenchidos.length + ' item(ns) informados agora · ' + pendentes.length + ' item(ns) ainda terão saldo. Confira antes de confirmar.'
+      : 'Nenhum item preenchido. Informe somente o que chegou.';
+  }
+  raizRecebimento.querySelectorAll('[data-rec]').forEach(c => c.addEventListener('input', resumirRecebimento));
+  document.getElementById('recPreencherSaldo').onclick = () => {
+    raizRecebimento.querySelectorAll('[data-rec]').forEach(c => { c.value = String(Math.round(Number(c.dataset.saldo) * 1000) / 1000).replace('.', ','); });
+    resumirRecebimento();
+    raizRecebimento.querySelector('[data-rec]')?.focus();
+  };
 
   // Fotos: sobem na hora, em partes, com barra de progresso.
   const campoFotos = document.getElementById('recFotos');
@@ -2026,6 +2224,7 @@ function telaReceberOC(o) {
     for (const file of Array.from(campoFotos.files || [])) {
       const img = document.createElement('img');
       img.src = URL.createObjectURL(file);
+      img.alt = 'Anexo: ' + (file.name || 'foto do recebimento');
       img.style.opacity = '.45';
       mini.appendChild(img);
       prog.style.display = '';

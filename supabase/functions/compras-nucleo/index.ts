@@ -1,3 +1,4 @@
+import { validarDocumento, totalRecebido, situacaoSolicitacao } from "../_shared/integridade.ts";
 import { consultarVendedoresPublicos } from "../_shared/vendedores.ts";
 import { validarRede, ErroRede } from "../_shared/rede.ts";
 // ============================================================================
@@ -34,7 +35,7 @@ import {
   db, agora, idNovo, tokenCurto, lerUm, gravarUm, lerTudo, apagarDeVez,
   lerCfgBruta, gravarCfg, proximoNumero, guardarIndiceNumero, lerNumeracao,
   definirNumeracao, registrarLog, lerLog, gravarBackup, apagarArquivo,
-  marcarMudanca,
+  marcarMudanca, atualizarRegistro,
 } from "../_shared/dados.ts";
 
 import { consultarMubi, parametrosConferencia, normalizarConferencia } from "../_shared/mubisys.ts";
@@ -111,7 +112,7 @@ const SUBOBJETOS_UNIAO = ["precos"];
 
 // O que o FORNECEDOR escreve ao responder a cotação pelo link.
 const CAMPOS_DA_RESPOSTA = ["precos", "respondidoEm", "contato", "total", "obs",
-  "prazoEntrega", "condicaoPagamento", "validade"];
+  "prazoEntrega", "condicaoPagamento", "validade", "frete"];
 
 function unirPorId(antigo: any, novo: any): any[] {
   const a = Array.isArray(antigo) ? antigo : [];
@@ -157,114 +158,126 @@ function arquivosDoRegistro(o: any): string[] {
 }
 
 /* ── Gravação: onde mora a inteligência do sistema ─────────────────────────── */
-async function gravar(col: string, registro: any, por: string): Promise<any> {
-  if (!COLECOES[col]) throw new Error("Coleção desconhecida: " + col);
+async function gravar(col: string, registro: any, por: string, quem?: Quem | null): Promise<any> {
+  if (!Object.hasOwn(COLECOES, col)) throw new ErroRede("Coleção desconhecida: " + col);
   const id = registro.id || idNovo();
-  const antigo = await lerUm(col, id);
-  const novo: any = { ...(antigo || {}), ...registro, id };
-
-  for (const campo of CAMPOS_UNIAO) {
-    if (antigo && (antigo[campo] || registro[campo])) novo[campo] = unirPorId(antigo[campo], registro[campo]);
-  }
-  for (const campo of CAMPOS_UNIAO_TEXTO) {
-    if (antigo && (antigo[campo] || registro[campo])) {
-      novo[campo] = [...new Set([...(antigo[campo] || []), ...(registro[campo] || [])])]
-        .filter((x: unknown) => typeof x === "string" && x);
+  const original = { ...registro };
+  delete original._col;
+  delete original._pendente;
+  let numeroReservado: number | undefined;
+  const salvo = await atualizarRegistro(col, id, async (antigo) => {
+    registro = quem ? reporEscondidos(quem, col, original, antigo) : original;
+    if (quem) {
+      const motivo = motivoRecusa(quem, col, registro, antigo);
+      if (motivo) throw new ErroRede(motivo);
     }
-  }
+    const novo: any = { ...(antigo || {}), ...registro, id };
+    delete novo._col;
+    delete novo._pendente;
 
-  await validarRede(col, novo, antigo, lerUm);
-
-  // A situação de uma ordem de compra é DECIDIDA AQUI, depois de juntar os
-  // recebimentos dos dois aparelhos. Cada celular só enxerga os recebimentos
-  // que ele mesmo conhece: se o estoque registra 40 e o comprador 80 de um
-  // pedido de 120, nenhum dos dois via "entregue" — a conta é do servidor.
-  //
-  // A situação que MANDA é a guardada, não a que veio do navegador: um modal de
-  // recebimento aberto há dez minutos trazia o retrato velho e ressuscitava uma
-  // compra que o escritório tinha acabado de cancelar.
-  const situacaoValida = (antigo && antigo.situacao) || novo.situacao;
-  if (antigo && antigo.situacao === "cancelada") novo.situacao = "cancelada";
-  // Cancelar é decisão deliberada de quem tem acesso e MANDA — o recálculo
-  // abaixo não pode desfazê-la. Antes, `situacaoValida` vinha da situação
-  // GUARDADA ('parcial'), o recálculo rodava assim mesmo e devolvia a ordem
-  // para 'parcial': o comprador cancelava, escrevia o motivo, e a compra
-  // continuava viva. A trava da linha acima cuida do caso inverso — modal
-  // velho tentando ressuscitar o que já estava cancelado.
-  if (col === "oc" && novo.situacao !== "cancelada" &&
-      Array.isArray(novo.recebimentos) && novo.recebimentos.length &&
-      !["cancelada", "rascunho"].includes(situacaoValida)) {
-    const recebidoDoItem = (itemId: string) => novo.recebimentos.reduce((s: number, r: any) => {
-      const achado = (r.itens || []).find((i: any) => i.itemId === itemId);
-      return s + ((achado && Number(achado.qtd)) || 0);
-    }, 0);
-    const completo = (novo.itens || []).length > 0 &&
-      (novo.itens || []).every((i: any) => recebidoDoItem(i.id) + 0.001 >= (Number(i.qtd) || 0));
-    // 'entregue' manual (encerrar mesmo com falta) não é rebaixado para parcial.
-    // Olha a situação GUARDADA, não a que veio no pacote: um recebimento que
-    // ficou preso na fila do celular sem sinal chega depois com 'parcial' e
-    // rebaixava uma ordem que o escritório já tinha encerrado — a compra
-    // reabria sozinha dias depois, sem ninguém entender por quê.
-    if (completo) novo.situacao = "entregue";
-    else if (situacaoValida !== "entregue") novo.situacao = "parcial";
-    else novo.situacao = "entregue";
-
-    // Quem decidiu que chegou tudo foi o servidor — então é ele que fecha as
-    // solicitações ligadas. O navegador sozinho não enxerga os recebimentos do
-    // outro aparelho e deixaria a solicitação presa em "em compra".
-    if (novo.situacao === "entregue" && (!antigo || antigo.situacao !== "entregue")) {
-      for (const sid of (novo.scIds || [])) {
-        try {
-          const sc = await lerUm("sc", sid);
-          if (!sc || sc.situacao === "atendida" || sc.apagadoEm) continue;
-          // Só fecha quando TODAS as ordens daquela solicitação chegaram. Um
-          // pedido dividido em duas compras virava "atendida" na primeira
-          // entrega e o resto do material sumia do radar de todo mundo.
-          let faltaAlguma = false;
-          for (const oid of (sc.ocIds || [])) {
-            if (oid === id) continue;
-            const outra = await lerUm("oc", oid);
-            if (!outra || outra.apagadoEm || outra.situacao === "cancelada") continue;
-            if (outra.situacao !== "entregue") { faltaAlguma = true; break; }
-          }
-          if (faltaAlguma) continue;
-          sc.situacao = "atendida";
-          sc.historico = unirPorId(sc.historico, [{
-            id: idNovo(), em: agora(), por: por || "—",
-            o_que: "Material recebido (" + (novo.codigo || "") + ")",
-          }]);
-          sc.atualizadoEm = agora();
-          await gravarUm("sc", sid, sc);
-        } catch { /* fechar a solicitação não pode derrubar a gravação da ordem */ }
+    for (const campo of CAMPOS_UNIAO) {
+      if (antigo && (antigo[campo] || registro[campo])) novo[campo] = unirPorId(antigo[campo], registro[campo]);
+    }
+    for (const campo of CAMPOS_UNIAO_TEXTO) {
+      if (antigo && (antigo[campo] || registro[campo])) {
+        novo[campo] = [...new Set([...(antigo[campo] || []), ...(registro[campo] || [])])]
+          .filter((x: unknown) => typeof x === "string" && x);
       }
     }
-  }
 
-  if (!novo.criadoEm) { novo.criadoEm = agora(); novo.criadoPor = por || registro.criadoPor || "—"; }
-  novo.atualizadoEm = agora();
-  novo.atualizadoPor = por || novo.atualizadoPor || "—";
+    if (col === "oc" && novo.cotacaoId) {
+      const cotacao = await lerUm("cot", novo.cotacaoId);
+      if (!cotacao || cotacao.apagadoEm || cotacao.situacao === "cancelada") throw new ErroRede("A cotação de origem não está disponível.");
+      if (!antigo) {
+        if (id !== "cot-" + novo.cotacaoId) throw new ErroRede("Atualize o aplicativo antes de gerar a ordem desta cotação.");
+        const ordens = await lerTudo(["oc"], NOMES_COLECOES);
+        if (cotacao.situacao !== "aberta" || (cotacao.ocId && cotacao.ocId !== id) ||
+            ordens.some(o => o.cotacaoId === novo.cotacaoId && o.id !== id)) throw new ErroRede("Esta cotação já gerou uma ordem. Abra a ordem existente.");
+      } else {
+        const identidade = (o: any) => o.fornecedorId || o.fornecedor?.cnpj || o.fornecedor?.nome || "";
+        if (antigo.cotacaoId !== novo.cotacaoId || identidade(antigo) !== identidade(novo)) throw new ErroRede("Esta cotação já gerou uma ordem para outro fornecedor. Revise a escolha existente antes de criar outra compra.");
+      }
+    }
+    if (col === "cot" && novo.situacao === "aprovada") {
+      const escolhido = (novo.fornecedores || []).filter((f: any) => f.escolhido);
+      const ordem = novo.ocId ? await lerUm("oc", novo.ocId) : null;
+      if (escolhido.length !== 1 || !ordem || ordem.cotacaoId !== id) throw new ErroRede("Confirme a ordem de compra e uma única proposta escolhida antes de concluir a cotação.");
+      const f = escolhido[0];
+      if ((f.fornecedorId || f.cnpj || f.nome || "") !== (ordem.fornecedorId || ordem.fornecedor?.cnpj || ordem.fornecedor?.nome || "")) throw new ErroRede("Outro fornecedor já foi escolhido nesta compra. Atualize a cotação para conferir.");
+      if (antigo?.situacao === "aprovada" && (antigo.ocId !== novo.ocId ||
+          (antigo.fornecedores || []).find((f: any) => f.escolhido)?.id !== f.id)) throw new ErroRede("A proposta vencedora já foi confirmada. Revise a compra existente.");
+    }
+    validarDocumento(col, novo, antigo);
+    await validarRede(col, novo, antigo, lerUm);
 
-  const pre = COLECOES[col].pre;
-  if (pre && !novo.numero) {
-    novo.numero = await proximoNumero(col);
-    novo.codigo = pre + "-" + String(novo.numero).padStart(4, "0");
-    try { await guardarIndiceNumero(col, novo.numero, id); } catch { /* índice é atalho */ }
-  }
-  if (pre && !novo.codigo && novo.numero) novo.codigo = pre + "-" + String(novo.numero).padStart(4, "0");
-  if (col === "oc" && !novo.tokenPublico) novo.tokenPublico = tokenCurto();
+    // A situação de uma ordem de compra é DECIDIDA AQUI, depois de juntar os
+    // recebimentos dos dois aparelhos. Cada celular só enxerga os recebimentos
+    // que ele mesmo conhece: se o estoque registra 40 e o comprador 80 de um
+    // pedido de 120, nenhum dos dois via "entregue" — a conta é do servidor.
+    //
+    // A situação que MANDA é a guardada, não a que veio do navegador: um modal de
+    // recebimento aberto há dez minutos trazia o retrato velho e ressuscitava uma
+    // compra que o escritório tinha acabado de cancelar.
+    const situacaoValida = antigo?.situacao || novo.situacao;
+    if (col === "oc") {
+      if (antigo?.situacao === "cancelada") novo.situacao = "cancelada";
+      if (novo.situacao !== "cancelada" && !["cancelada", "rascunho"].includes(situacaoValida)) {
+        const completo = novo.itens.length > 0 && novo.itens.every((i: any) => totalRecebido(novo, i.id) + 0.001 >= i.qtd);
+        // Encerrar com falta tem motivo explícito e exige permissão do comprador.
+        // Um status enviado pelo aparelho, sozinho, não declara entrega completa.
+        if (completo || novo.encerradaComFalta) {
+          novo.situacao = "entregue";
+          novo.recebidoEm ||= agora();
+        } else if (novo.recebimentos?.length) novo.situacao = "parcial";
+        else if (novo.situacao === "entregue" && antigo?.situacao !== "entregue") throw new ErroRede("Registre as quantidades recebidas antes de concluir a entrega.");
+      }
+    }
+    if (col === "sc") {
+      const relacionadas = await lerTudo(["oc", "cot"], NOMES_COLECOES);
+      novo.situacao = situacaoSolicitacao(novo, relacionadas.filter(r => r._col === "oc"), relacionadas.filter(r => r._col === "cot"));
+    }
 
-  // Cada fornecedor convidado ganha um endereço próprio para responder — é o
-  // link que vai no WhatsApp. Um token por convite: um fornecedor nunca vê a
-  // resposta do outro.
-  if (col === "cot") {
-    novo.fornecedores = (novo.fornecedores || []).map((f: any) =>
-      f && !f.token ? { ...f, token: tokenCurto() } : f);
-  }
+    if (!novo.criadoEm) { novo.criadoEm = agora(); novo.criadoPor = por || registro.criadoPor || "—"; }
+    novo.atualizadoEm = agora();
+    novo.atualizadoPor = por || novo.atualizadoPor || "—";
 
-  await gravarUm(col, id, novo);
+    const pre = COLECOES[col].pre;
+    if (pre && !novo.numero) {
+      numeroReservado ??= await proximoNumero(col);
+      novo.numero = numeroReservado;
+      novo.codigo = pre + "-" + String(novo.numero).padStart(4, "0");
+      try { await guardarIndiceNumero(col, novo.numero, id); } catch { /* índice é atalho */ }
+    }
+    if (pre && !novo.codigo && novo.numero) novo.codigo = pre + "-" + String(novo.numero).padStart(4, "0");
+    if (col === "oc" && !novo.tokenPublico) novo.tokenPublico = tokenCurto();
+
+    // Cada fornecedor convidado ganha um endereço próprio para responder — é o
+    // link que vai no WhatsApp. Um token por convite: um fornecedor nunca vê a
+    // resposta do outro.
+    if (col === "cot") {
+      novo.fornecedores = (novo.fornecedores || []).map((f: any) =>
+        f && !f.token ? { ...f, token: tokenCurto() } : f);
+    }
+
+    return novo;
+  });
   await marcarMudanca(col);
-  novo._col = col;
-  return novo;
+  if (["oc", "cot"].includes(col)) await atualizarSolicitacoes(salvo.scIds || [], por);
+  return { ...salvo, _col: col };
+}
+
+async function atualizarSolicitacoes(ids: string[], por: string) {
+  for (const id of new Set(ids)) {
+    await atualizarRegistro("sc", id, async (atual) => {
+      if (!atual || atual.apagadoEm) return null;
+      const relacionados = await lerTudo(["oc", "cot"], NOMES_COLECOES);
+      const situacao = situacaoSolicitacao(atual, relacionados.filter(r => r._col === "oc"), relacionados.filter(r => r._col === "cot"));
+      if (situacao === atual.situacao) return null;
+      return { ...atual, situacao, atualizadoEm: agora(), atualizadoPor: por,
+        historico: unirPorId(atual.historico, [{ id: idNovo(), em: agora(), por, o_que: "Saldo dos materiais conferido: " + situacao }]) };
+    });
+    await marcarMudanca("sc");
+  }
 }
 
 /* ── Limpeza do que vem de fora (solicitação pública) ──────────────────────── */
@@ -324,7 +337,8 @@ Deno.serve(async (req) => {
   const cfg = await lerCfg();
 
   // Identidade: o crachá da Central de Acessos no header Authorization.
-  const quem: Quem | null = await identificarPorCracha(req);
+  const ESCRITAS = ["salvarLote", "apagar", "esvaziarLixeira", "reiniciarNumeracao", "restaurarItem", "salvarCfg", "restaurar"];
+  const quem: Quem | null = await identificarPorCracha(req, ESCRITAS.includes(action));
   const autenticado = !!quem;
   // Nome que vai para o histórico: se o acesso é próprio, o nome do cadastro
   // manda — assim ninguém assina no lugar de outro trocando o campo do login.
@@ -613,14 +627,7 @@ Deno.serve(async (req) => {
         const recusados: any[] = [];
         for (const it of itens) {
           if (!it || !it.colecao || !it.registro) continue;
-          const atual = it.registro.id ? await lerUm(it.colecao, it.registro.id) : null;
-          // Repõe o que a máscara de leitura tinha tirado, ANTES de comparar e
-          // de gravar: sem isso, o solicitante era recusado por "alterar" um
-          // preço que ele nunca viu — e, se passasse, apagaria esse preço.
-          const reg = reporEscondidos(quem, it.colecao, it.registro, atual);
-          const motivo = motivoRecusa(quem, it.colecao, reg, atual);
-          if (motivo) { recusados.push({ colecao: it.colecao, id: it.registro.id, motivo }); continue; }
-          try { salvos.push(await gravar(it.colecao, reg, por)); }
+          try { salvos.push(await gravar(it.colecao, it.registro, por, quem)); }
           catch (e) { if (e instanceof ErroRede) recusados.push({ colecao: it.colecao, id: it.registro.id, motivo: e.message }); else throw e; }
         }
         if (recusados.length) {
@@ -630,7 +637,7 @@ Deno.serve(async (req) => {
           });
         }
         await registrarLog({ acao: "salvou", por, qtd: salvos.length, cols: itens.map((i: any) => i.colecao).join(",") });
-        return json({ ok: true, salvos, recusados });
+        return json({ ok: true, salvos: filtrarLeitura(quem, salvos), recusados });
       }
 
       // Lixeira: marca apagadoEm em vez de sumir com o registro.
@@ -638,9 +645,9 @@ Deno.serve(async (req) => {
         const { colecao, id } = body;
         const r = await lerUm(colecao, id);
         if (!r) return json({ ok: true });
-        r.apagadoEm = agora();
-        r.apagadoPor = por;
-        await gravarUm(colecao, id, r);
+        if (!Object.hasOwn(COLECOES, colecao)) return json({ error: "Coleção inválida" }, 400);
+        const removido = await atualizarRegistro(colecao, id, atual => atual ? ({ ...atual, apagadoEm: agora(), apagadoPor: por }) : null);
+        if (["oc", "cot"].includes(colecao)) await atualizarSolicitacoes(removido?.scIds || [], por);
         await marcarMudanca(colecao);
         await registrarLog({ acao: "apagou", por, colecao, id, codigo: r.codigo || r.nome });
         return json({ ok: true });
@@ -686,11 +693,15 @@ Deno.serve(async (req) => {
         const { colecao, id } = body;
         const r = await lerUm(colecao, id);
         if (!r) return json({ ok: false, error: "Não encontrado" }, 404);
-        delete r.apagadoEm; delete r.apagadoPor;
-        r.atualizadoEm = agora(); r.atualizadoPor = por;
-        await gravarUm(colecao, id, r);
+        if (!Object.hasOwn(COLECOES, colecao)) return json({ error: "Coleção inválida" }, 400);
+        const restaurado = await atualizarRegistro(colecao, id, atual => {
+          if (!atual) throw new ErroRede("Registro não encontrado");
+          delete atual.apagadoEm; delete atual.apagadoPor;
+          return { ...atual, atualizadoEm: agora(), atualizadoPor: por };
+        });
         await marcarMudanca(colecao);
-        return json({ ok: true, registro: r });
+        if (["oc", "cot"].includes(colecao)) await atualizarSolicitacoes(restaurado.scIds || [], por);
+        return json({ ok: true, registro: restaurado });
       }
 
       // ── PÚBLICO: a equipe pede material sem senha ───────────────────────────
@@ -801,41 +812,41 @@ Deno.serve(async (req) => {
       }
 
       case "responderCotacao": {
-        const c = await lerUm("cot", body.id);
-        if (!c || c.apagadoEm) return json({ ok: false, error: "Cotação não encontrada" }, 404);
-        if (c.situacao !== "aberta") return json({ ok: false, error: "Esta cotação já foi encerrada" }, 403);
-        const i = (c.fornecedores || []).findIndex((x: any) => x.token && x.token === body.t);
-        if (i < 0) return json({ ok: false, error: "Link inválido" }, 403);
-
-        const precos: Record<string, number> = {};
-        for (const it of (c.itens || [])) {
-          const v = num((body.precos || {})[it.id]);
-          if (v > 0) precos[it.id] = v;
-        }
-        if (!Object.keys(precos).length) return json({ ok: false, error: "Informe o preço de pelo menos um item" }, 400);
-
-        const f = c.fornecedores[i];
-        const total = (c.itens || []).reduce((s2: number, it: any) =>
-          s2 + (precos[it.id] || 0) * (Number(it.qtd) || 0), 0) + num(body.frete);
-
-        c.fornecedores[i] = {
-          ...f, precos, frete: num(body.frete), total,
-          prazoEntrega: txt(body.prazoEntrega, 60),
-          condicaoPagamento: txt(body.condicaoPagamento, 60),
-          validade: txt(body.validade, 40),
-          obs: txt(body.obs, 500),
-          contato: txt(body.contato, 80) || f.contato,
-          respondidoEm: agora(),
-        };
-        c.historico = unirPorId(c.historico, [{
-          id: idNovo(), em: agora(), por: f.nome || "fornecedor",
-          o_que: "Cotação respondida por " + (f.nome || "—") + ": " +
-            total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }),
-        }]);
-        c.atualizadoEm = agora();
-        await gravarUm("cot", c.id, c);
+        const respondidoEm = agora();
+        const histId = idNovo();
+        const salvo = await atualizarRegistro("cot", body.id, async c => {
+          if (!c || c.apagadoEm) throw new ErroRede("Cotação não encontrada");
+          if (c.situacao !== "aberta") throw new ErroRede("Esta cotação já foi encerrada");
+          const i = (c.fornecedores || []).findIndex((x: any) => x.token && x.token === body.t);
+          if (i < 0) throw new ErroRede("Link inválido");
+          const precos: Record<string, number> = {};
+          for (const it of (c.itens || [])) {
+            const entrada = (body.precos || {})[it.id];
+            if (entrada == null || entrada === "") continue;
+            const v = typeof entrada === "number" || typeof entrada === "string" ? Number(String(entrada).replace(",", ".")) : NaN;
+            if (!Number.isFinite(v) || v < 0) throw new ErroRede("Preço inválido");
+            if (v > 0) precos[it.id] = v;
+          }
+          if (!Object.keys(precos).length) throw new ErroRede("Informe o preço de pelo menos um item");
+          const frete = body.frete == null || body.frete === "" ? 0 :
+            typeof body.frete === "number" || typeof body.frete === "string" ? Number(String(body.frete).replace(",", ".")) : NaN;
+          if (!Number.isFinite(frete) || frete < 0) throw new ErroRede("Frete inválido");
+          const f = c.fornecedores[i];
+          const total = c.itens.reduce((s: number, it: any) => s + (precos[it.id] || 0) * it.qtd, 0) + frete;
+          // Outra resposta mais nova do MESMO convite já venceu esta requisição.
+          if (f.respondidoEm && f.respondidoEm > respondidoEm) return c;
+          const resposta = { precos, frete, total,
+            prazoEntrega: txt(body.prazoEntrega, 60), condicaoPagamento: txt(body.condicaoPagamento, 60),
+            validade: txt(body.validade, 40), obs: txt(body.obs, 500), contato: txt(body.contato, 80) || f.contato };
+          if (f.respondidoEm && Object.entries(resposta).every(([k, v]) => JSON.stringify(f[k]) === JSON.stringify(v))) return null;
+          c.fornecedores[i] = { ...f, ...resposta, respondidoEm };
+          c.historico = unirPorId(c.historico, [{ id: histId, em: respondidoEm, por: f.nome || "fornecedor", o_que: "Cotação respondida por " + (f.nome || "—") + ": " + total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) }]);
+          c.atualizadoEm = agora();
+          validarDocumento("cot", c, null);
+          return c;
+        });
         await marcarMudanca("cot");
-        return json({ ok: true, total });
+        return json({ ok: true, total: salvo.fornecedores.find((f: any) => f.token === body.t)?.total });
       }
 
       // ── Configurações ──────────────────────────────────────────────────────
@@ -933,6 +944,6 @@ Deno.serve(async (req) => {
     }
   } catch (e) {
     console.error("[nucleo] erro:", e);
-    return json({ error: (e as Error)?.message || String(e) }, 500);
+    return json({ error: (e as Error)?.message || String(e) }, e instanceof ErroRede ? 400 : 500);
   }
 });

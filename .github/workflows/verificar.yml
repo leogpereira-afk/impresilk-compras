@@ -16,6 +16,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - name: Dependências de teste
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Sintaxe de todos os .js
         run: |
           set -e
@@ -46,3 +51,13 @@ jobs:
 
       - name: Sintaxe do servidor
         run: node tests/sintaxe-servidor.mjs
+
+      - name: Regressões da auditoria
+        run: |
+          node tests/compras-auditoria.mjs
+          node tests/backend-auditoria.mjs
+          node tests/experiencia-ui.mjs
+          node tests/salvamento-experiencia.mjs
+          node tests/acervo-auditoria.mjs
+          node tests/cotacao-saldo.mjs
+          node tests/pdf-auditoria.mjs

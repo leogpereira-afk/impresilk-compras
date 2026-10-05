@@ -44,7 +44,85 @@ function rotaAtual() {
   return { tela: partes[0] || 'painel', args: partes.slice(1) };
 }
 
-const irPara = (r) => { location.hash = '#/' + r; };
+async function irPara(r) {
+  const destino = '#/' + r;
+  if (destino === location.hash) return;
+  if (!await permitirSaidaEdicao()) return;
+  location.hash = destino;
+}
+let _rotaRenderizada = location.hash || '#/painel';
+let _chaveRascunho = '';
+let _saidaPendente = false;
+function limparRascunhoEdicao() {
+  S.formSujo = false;
+  try { if (_chaveRascunho) sessionStorage.removeItem(_chaveRascunho); } catch { /* indisponível */ }
+}
+async function permitirSaidaEdicao() {
+  if (!S.formSujo) return true;
+  if (_saidaPendente) return false;
+  _saidaPendente = true;
+  try {
+    const sair = await confirmar('Há alterações não salvas nesta ordem. Deseja descartá-las e sair?', {ok:'Descartar e sair',cancelar:'Continuar editando',perigo:true});
+    if (sair) limparRascunhoEdicao();
+    return sair;
+  } finally { _saidaPendente = false; }
+}
+function protegerEdicaoOC() {
+  const form = document.getElementById('fOC');
+  if (!form) return;
+  _chaveRascunho = 'compras_rascunho:' + (S.usuarioId || S.quem) + ':' + location.hash;
+  const capturar = () => {
+    const campos = [...form.querySelectorAll('[data-campo],#selForn')].filter(e => !e.closest('[data-item]')).map(e=>({chave:e.dataset.campo||e.id,valor:e.value,marcado:e.checked}));
+    const itens = [...form.querySelectorAll('[data-item]')].map(e=>({meta:{...e.dataset},campos:[...e.querySelectorAll('[data-i]')].map(x=>({chave:x.dataset.i,valor:x.value}))}));
+    return {campos,itens,em:new Date().toISOString()};
+  };
+  const aviso = document.createElement('div');
+  aviso.className = 'aviso info'; aviso.id = 'edicaoAviso'; aviso.setAttribute('role','status'); aviso.hidden = true;
+  form.prepend(aviso);
+  const guardar = () => {
+    S.formSujo = true; aviso.hidden = false;
+    try { sessionStorage.setItem(_chaveRascunho, JSON.stringify(capturar())); aviso.textContent = 'Alterações não salvas. Rascunho recuperável nesta aba; use Salvar para guardar a ordem.'; }
+    catch { aviso.textContent = 'Alterações não salvas. Não foi possível guardar rascunho nesta aba; mantenha a tela aberta até salvar.'; }
+  };
+  form.addEventListener('input', e=>{if(!e.target.matches('[type=search]'))guardar();});
+  form.addEventListener('change', guardar);
+  form.addEventListener('click', e=>{if(e.target.closest('[data-tirar],#maisItem'))guardar();});
+  let anterior;
+  try { anterior = JSON.parse(sessionStorage.getItem(_chaveRascunho)||'null'); } catch { /* inexistente */ }
+  if (anterior && Array.isArray(anterior.campos) && Array.isArray(anterior.itens)) {
+    aviso.hidden = false; aviso.textContent = 'Existe um rascunho desta ordem guardado nesta aba. ';
+    const recuperar = document.createElement('button'); recuperar.className='btn pequeno'; recuperar.textContent='Recuperar rascunho';
+    const descartar = document.createElement('button'); descartar.className='btn pequeno'; descartar.textContent='Descartar rascunho';
+    aviso.append(recuperar,descartar);
+    recuperar.onclick=()=>{
+      const sel=form.querySelector('#selForn'), fornecedor=anterior.campos.find(x=>x.chave==='selForn');
+      if(sel && fornecedor){sel.value=fornecedor.valor;sel.dispatchEvent(new Event('change',{bubbles:true}));}
+      for(const e of form.querySelectorAll('[data-campo],#selForn')){
+        if(e.closest('[data-item]'))continue;
+        const x=anterior.campos.find(x=>x.chave===(e.dataset.campo||e.id));
+        if(x){e.value=x.valor; if(e.type==='checkbox')e.checked=!!x.marcado;}
+      }
+      const caixa=form.querySelector('#itensOC');
+      if(caixa){
+        caixa.innerHTML=anterior.itens.map(x=>linhaItem(Object.assign(Object.fromEntries(x.campos.map(c=>[c.chave,c.valor])),{id:x.meta.id,origemScId:x.meta.origemScId,origemScItemId:x.meta.origemScItemId,nomeFornecedor:x.meta.nomeFornecedor,codigoFornecedor:x.meta.codigoFornecedor}),true)).join('');
+        for(const [i,row] of [...caixa.querySelectorAll('[data-item]')].entries())for(const e of row.querySelectorAll('[data-i]')){
+          const x=anterior.itens[i].campos.find(x=>x.chave===e.dataset.i);if(x)e.value=x.valor;
+        }
+        ligarItens(caixa,true); ligarRotulosRede(caixa);
+      }
+      const difal=form.querySelector('#ocDifal');if(difal)difal.dispatchEvent(new Event('change',{bubbles:true}));
+      recalcularOC();guardar();
+      toast('Rascunho recuperado. Confira fornecedor, banco e vínculo da O.S. antes de salvar.');
+    };
+    descartar.onclick=()=>{limparRascunhoEdicao();aviso.hidden=true;};
+  }
+}
+window.addEventListener('beforeunload', e=>{if(S.formSujo){e.preventDefault();e.returnValue='';}});
+document.addEventListener('click', e=>{
+  const a=e.target.closest && e.target.closest('a[href^="#/"]');
+  if(a && S.formSujo && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey){e.preventDefault();irPara(a.getAttribute('href').slice(2));}
+},true);
+
 
 /* ── Menu ──────────────────────────────────────────────────────────────────── */
 const MENU = [
@@ -79,24 +157,28 @@ function montarShell() {
   app.dataset.shell = '1';
   app.innerHTML =
     '<div class="app">' +
-      '<aside class="lateral">' +
+      '<aside class="lateral" id="lateralMenu">' +
         '<div class="marca"><img src="icons/logo-impresilk.png" alt="Impresilk" width="190"><small>Compras e suprimentos</small></div>' +
         '<nav class="menu" id="menu"></nav>' +
         '<div class="rodape-lateral" id="rodapeLateral"></div>' +
       '</aside>' +
-      '<main class="conteudo">' +
+      '<a class="pular-conteudo" href="#pagina">Ir para o conteúdo</a><main class="conteudo">' +
         '<header class="topo">' +
           '<button class="hamburguer" id="btnMenu" aria-label="Menu">☰</button>' +
           '<div><h1 id="tituloTela">Painel</h1><div class="sub" id="subTela"></div></div>' +
           '<div class="dir" id="acoesTopo"></div>' +
         '</header>' +
-        '<div class="pagina" id="pagina"></div>' +
+        '<div class="pagina" id="pagina" tabindex="-1"></div>' +
       '</main>' +
     '</div>';
 
-  document.getElementById('btnMenu').addEventListener('click', () => document.body.classList.toggle('menu-aberto'));
+  document.querySelector('.pular-conteudo').addEventListener('click',e=>{e.preventDefault();document.getElementById('pagina').focus();});
+  document.getElementById('btnMenu').addEventListener('click', () => {
+    document.body.classList.toggle('menu-aberto'); sincronizarMenuAcessivel();
+    if(document.body.classList.contains('menu-aberto'))document.querySelector('#menu a')?.focus();
+  });
   document.getElementById('menu').addEventListener('click', (e) => {
-    if (e.target.closest('a')) document.body.classList.remove('menu-aberto');
+    if (e.target.closest('a')) {document.body.classList.remove('menu-aberto');sincronizarMenuAcessivel();}
   });
 }
 
@@ -112,16 +194,19 @@ function pintarMenu(telaAtiva) {
       (n ? '<span class="bolha">' + n + '</span>' : '') + '</a>';
   }).join('');
   document.getElementById('menu').innerHTML = html;
+  document.querySelector('#menu a.ativo')?.setAttribute('aria-current','page');
+  sincronizarMenuAcessivel();
 
   const pend = S.fila.length;
   const rodape = document.getElementById('rodapeLateral');
   rodape.innerHTML =
     '<div><b>' + esc(S.quem || 'sem nome') + '</b>' +
       (S.perfil && S.perfil !== 'direcao' ? ' · ' + esc((PERFIS_APP[S.perfil] || {}).txt || '') : '') + '</div>' +
-    '<div>' + (!S.online ? 'sem internet — salvando no aparelho'
-      : pend ? pend + ' item(ns) esperando envio'
-      : S.erroSync ? 'erro: ' + esc(S.erroSync)
-      : S.ultimoPull ? 'Atualizado ' + new Date(S.ultimoPull).toLocaleString('pt-BR') : 'Aguardando atualização') + '</div>' +
+    '<div>' + (S.erroSync ? 'Atenção: ' + esc(S.erroSync)
+      : !S.online ? 'Sem internet' + (pend ? ' · alterações guardadas aguardando envio' : '')
+      : pend ? pend + ' alteração(ões) aguardando confirmação do servidor'
+      : S.ultimoPull ? 'Servidor atualizado ' + new Date(S.ultimoPull).toLocaleString('pt-BR') : 'Aguardando atualização') + '</div>' +
+    (S.erroCache ? '<div class="aviso ruim" role="status">'+esc(S.erroCache)+'</div>' : S.cacheDisponivel ? '<div>Cópia local disponível</div>' : '') +
     '<div class="rodape-botoes">' +
       '<button id="btnSincronizar" title="Buscar novidades e enviar o que está esperando">' +
         (S.sincronizando ? '⏳ sincronizando…' : '🔄 Sincronizar' + (pend ? ' (' + pend + ')' : '')) + '</button>' +
@@ -138,10 +223,12 @@ function pintarMenu(telaAtiva) {
 // Sincronizar na mão: na rua o sinal vai e volta, e esperar o ciclo
 // automático de 90s com o caminhão parado no portão não serve.
 async function sincronizarAgora() {
-  if (!navigator.onLine) { toast('Sem internet agora. O que você fez está guardado no aparelho.', 'ruim'); return; }
+  if (!navigator.onLine) { toast('Sem internet agora. Confira as alterações aguardando envio no rodapé.', 'ruim'); return; }
   if (S.sincronizando) return;
   toast('Sincronizando…');
   const pendAntes = S.fila.length;
+  const tentativa = S.fila.map(f=>{const n={...f};delete n.erro;return n;});
+  if(gravarFila(tentativa))S.fila=tentativa;
   try {
     await subirFila();
     await puxar();
@@ -152,7 +239,7 @@ async function sincronizarAgora() {
   } catch (e) {
     toast('Não consegui sincronizar: ' + e.message, 'ruim');
   }
-  render();
+  renderSeSeguro();
 }
 
 // Sair = trocar de usuário. Leva junto o cache do aparelho: os dados ficam em
@@ -167,7 +254,10 @@ async function sair() {
   } else if (!await confirmar('Sair do sistema? Você vai precisar da senha para entrar de novo.', { ok: 'Sair' })) {
     return;
   }
+  if(!await permitirSaidaEdicao())return;
+  await limparCacheLocal();
   try {
+    for(let i=sessionStorage.length-1;i>=0;i--){const k=sessionStorage.key(i);if(k?.startsWith('compras_rascunho:'))sessionStorage.removeItem(k);}
     AUTH.esquecer();
     localStorage.removeItem(K.perfil);
     localStorage.removeItem(K.usuario);
@@ -222,6 +312,10 @@ function render() {
     return;
   }
   t(pagina, args);
+  _rotaRenderizada=location.hash || '#/painel';
+  protegerEdicaoOC();
+  associarRotulosUI(pagina);
+  sincronizarMenuAcessivel();
   // Agora sim a tela está mostrando os dados desta assinatura.
   if (S.assinaturaPendente) { S.assinatura = S.assinaturaPendente; S.assinaturaPendente = null; }
 }
@@ -239,17 +333,28 @@ function renderSeSeguro() {
   if (document.querySelector('.fundo-modal')) { pintarMenuSeguro(); return; }
   const foco = document.activeElement;
   if (foco && foco.matches && foco.matches('input,textarea,select')) { pintarMenuSeguro(); return; }
-  if (S.formAberto) { pintarMenuSeguro(); return; }
+  if (S.formAberto || S.formSujo) { pintarMenuSeguro(); return; }
   render();
 }
 function pintarMenuSeguro() {
   if (document.getElementById('menu')) pintarMenu(rotaAtual().tela);
 }
 
-window.addEventListener('hashchange', () => {
+window.addEventListener('hashchange', async () => {
+  const destino=location.hash;
+  if(S.formSujo){
+    history.replaceState(null,'',_rotaRenderizada);
+    if(!await permitirSaidaEdicao())return;
+    location.hash=destino;return;
+  }
   S.formAberto = false;
-  render();
-  window.scrollTo(0, 0);   // só na troca de tela, nunca no redesenho por sync
+  render(); window.scrollTo(0, 0);
+});
+window.addEventListener('resize',()=>sincronizarMenuAcessivel());
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape' && !e.defaultPrevented && document.body.classList.contains('menu-aberto') && !document.querySelector('.fundo-modal')){
+    document.body.classList.remove('menu-aberto');sincronizarMenuAcessivel();document.getElementById('btnMenu')?.focus();
+  }
 });
 document.addEventListener('domo:dados', renderSeSeguro);
 document.addEventListener('domo:status', pintarMenuSeguro);
@@ -258,7 +363,7 @@ document.addEventListener('domo:sempermissao', (e) => {
   const quais = (d.itens || []).map((x) => (x.codigo || x.colecao)).filter(Boolean).slice(0, 4).join(', ');
   toast('Não foi salvo: ' + (d.msg || 'seu acesso não permite') +
     (quais ? ' — ' + quais : '') + (d.qtd > 4 ? ' e mais ' + (d.qtd - 4) : ''), 'ruim');
-  render();
+  renderSeSeguro();
 });
 document.addEventListener('domo:semsenha', () => {
   if (!AUTH.temCracha()) return;
@@ -304,7 +409,9 @@ function telaEntrar() {
     entrando = true;
     document.getElementById('btnEntrar').disabled = true;
     try {
+      if(S.fila.length && S.usuarioId && usuario !== S.usuarioId)throw new Error('Há alterações pendentes de outro usuário neste aparelho. Entre com o usuário anterior para sincronizar primeiro.');
       const r = await AUTH.login(usuario, senha);
+      if(S.usuarioId && (r.usuario||usuario)!==S.usuarioId){await limparCacheLocal();S.reg=regVazio();S.cfg=null;S.ultimoPull=0;}
       S.quem = r.nome || usuario;
       S.usuarioId = r.usuario || usuario;
       S.acessoProprio = true;
@@ -395,7 +502,7 @@ TELAS.painel = function (el) {
         indicador('Material ainda a receber · todos os meses', aChegar==null?'Preço incompleto':fmt.brl(aChegar),
           emRota.length + ' ordem(ns) · sem rateio de frete e encargos' + (atrasadas.length ? ' · ' + atrasadas.length + ' atrasada(s)' : semPrevisao.length ? ' · ' + semPrevisao.length + ' sem previsão' : ' com previsão'),
           atrasadas.length ? 'alerta' : '', 'recebimento') +
-        indicador('Solicitações abertas', String(lista('sc').filter((x) => x.situacao === 'nova').length),
+        indicador('Aguardando aprovação', String(lista('sc').filter((x) => x.situacao === 'nova').length),
           'esperando aprovação', '', 'solicitacoes') +
       '</div>'
       : '<div class="grade g3 compacto" style="margin-bottom:16px">' +
@@ -403,7 +510,7 @@ TELAS.painel = function (el) {
         indicador('A caminho', String(emRota.length),
           atrasadas.length ? atrasadas.length + ' atrasada(s)' : semPrevisao.length ? semPrevisao.length + ' sem previsão' : 'com previsão',
           atrasadas.length ? 'alerta' : '', 'recebimento') +
-        indicador('Minhas solicitações', String(lista('sc').filter((x) => x.situacao === 'nova').length), 'esperando aprovação', '', 'solicitacoes') +
+        indicador('Aguardando aprovação', String(lista('sc').filter((x) => x.situacao === 'nova').length), 'esperando aprovação', '', 'solicitacoes') +
       '</div>') +
 
     htmlInteligenciaCompras() +
@@ -696,14 +803,7 @@ function ligarSenhaEAparelho(el) {
   // Só apagava a chave da senha compartilhada, que nem é mais usada: o crachá
   // continuava no aparelho e a pessoa seguia dentro. Quem identifica é o crachá.
   const bx = document.getElementById('sair');
-  if (bx) bx.addEventListener('click', async () => {
-    if (S.fila.length && !await confirmar('Ainda tem ' + S.fila.length + ' item(ns) esperando envio. Sair mesmo assim?', { perigo: true })) return;
-    AUTH.esquecer();
-    localStorage.removeItem(K.senha);
-    S.senhaHash = ''; S.acessoProprio = false; S.usuarioId = ''; S.perfil = 'obra';
-    [K.perfil, K.usuario].forEach((k) => localStorage.removeItem(k));
-    render();
-  });
+  if (bx) bx.addEventListener('click', sair);
 }
 
 function cartaoAcessosEquipe() {
@@ -875,7 +975,7 @@ TELAS.config = function (el) {
       cartaoAcessosEquipe() +
       '<div class="cartao">' +
         '<h3>💾 Backup</h3>' +
-        '<p class="legenda">Uma cópia de tudo é guardada sozinha todo dia no servidor (60 dias de histórico). Aqui você baixa uma cópia para o seu computador.</p>' +
+        '<p class="legenda">Baixe uma cópia dos registros para guardar em local seguro. A rotina automática externa e sua recuperação precisam ser verificadas; esta tela não confirma backup diário nem inclui o conteúdo dos anexos.</p>' +
         '<div class="barra-acoes">' +
           '<button class="btn" id="baixarBackup">Baixar backup agora</button>' +
           '<button class="btn" id="verLog">Ver histórico de acessos</button>' +
@@ -1360,13 +1460,16 @@ async function telaVerPublico(args) {
 }
 
 /* ── Partida ───────────────────────────────────────────────────────────────── */
-lerCache();
-render();
+async function iniciarCompras(){
+  await lerCache();
+  render();
+  if (AUTH.temCracha()) puxar();
+}
+iniciarCompras().catch(e=>{console.error('Abertura:',e);render();toast('Não foi possível abrir a cópia local. Conecte e sincronize.','ruim');});
 // Era `if (S.senhaHash) puxar()` — e S.senhaHash vem da chave da senha
 // compartilhada, que ninguém escreve desde que o login virou crachá. Resultado:
 // o app NUNCA sincronizava ao abrir. Quem chegava de manhã via o cache de
 // ontem até fazer alguma ação que puxasse. Quem identifica hoje é o crachá.
-if (AUTH.temCracha()) puxar();
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
