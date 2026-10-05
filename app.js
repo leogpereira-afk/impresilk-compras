@@ -226,6 +226,11 @@ async function sincronizarAgora() {
   if (!navigator.onLine) { toast('Sem internet agora. Confira as alterações aguardando envio no rodapé.', 'ruim'); return; }
   if (S.sincronizando) return;
   toast('Sincronizando…');
+  if (!abaPodeEscrever()) {
+    await puxar();
+    toast(S.erroSync ? 'Não consegui atualizar a consulta: ' + S.erroSync : 'Consulta atualizada. Para alterar dados, use a aba de edição.', S.erroSync ? 'ruim' : 'bom');
+    renderSeSeguro(); return;
+  }
   const pendAntes = S.fila.length;
   const tentativa = S.fila.map(f=>{const n={...f};delete n.erro;return n;});
   if(gravarFila(tentativa))S.fila=tentativa;
@@ -246,6 +251,7 @@ async function sincronizarAgora() {
 // texto no celular e, sem isso, continuavam lá depois de a pessoa sair — ou de
 // a direção desligar o acesso dela.
 async function sair() {
+  if (!abaPodeEscrever()) { toast('Esta aba está somente para consulta. Para sair sem apagar trabalho de outra aba, use Sair na aba que está editando.', 'ruim'); return; }
   if (S.fila.length) {
     const ok = await confirmar(S.fila.length + ' alteração(ões) ainda não subiram para o servidor. ' +
       'Se você sair agora, esse trabalho se perde. Quer tentar sincronizar antes?',
@@ -255,6 +261,7 @@ async function sair() {
     return;
   }
   if(!await permitirSaidaEdicao())return;
+  invalidarSessaoDados();
   await limparCacheLocal();
   try {
     for(let i=sessionStorage.length-1;i>=0;i--){const k=sessionStorage.key(i);if(k?.startsWith('compras_rascunho:'))sessionStorage.removeItem(k);}
@@ -264,7 +271,7 @@ async function sair() {
     localStorage.removeItem(K.cache);
     localStorage.removeItem(K.fila);
   } catch { /* modo privado */ }
-  S.senhaHash = ''; S.perfil = 'direcao'; S.usuarioId = ''; S.acessoProprio = false;
+  S.senhaHash = ''; S.perfil = 'obra'; S.usuarioId = ''; S.acessoProprio = false;
   S.reg = regVazio(); S.fila = []; S.cfg = null;
   consultaERP = null;
   location.hash = '#/painel';
@@ -277,15 +284,41 @@ function cabecalho(titulo, sub, acoesHtml) {
   document.getElementById('acoesTopo').innerHTML = acoesHtml || '';
 }
 
+function pintarAvisoAba() {
+  const anterior = document.getElementById('avisoOutraAba');
+  if (anterior) anterior.remove();
+  if (abaPodeEscrever()) return;
+  const pagina = document.getElementById('pagina');
+  const entrada = document.querySelector('#app .caixa');
+  if (!pagina && !entrada) return;
+  const aviso = document.createElement('div');
+  aviso.id = 'avisoOutraAba'; aviso.className = 'aviso info'; aviso.setAttribute('role','status');
+  aviso.style.margin = '12px 20px';
+  aviso.textContent = S.avisoAba + ' ';
+  if (navigator.locks && typeof navigator.locks.request === 'function') {
+    const b = document.createElement('button'); b.className = 'btn pequeno'; b.textContent = 'Assumir edição';
+    b.onclick = async () => {
+      if (!await permitirSaidaEdicao()) return;
+      b.disabled = true;
+      const assumiu = await iniciarControleAbas();
+      if (assumiu) { S.formAberto = false; await puxar(); render(); toast('Esta aba está pronta para editar. A fila local foi recuperada.','bom'); }
+      else { b.disabled = false; toast(S.avisoAba,'ruim'); }
+    };
+    aviso.append(b);
+  }
+  if (pagina) pagina.before(aviso); else entrada.prepend(aviso);
+}
+
 /* ── Roteador ──────────────────────────────────────────────────────────────── */
 /* (o objeto TELAS é declarado no ui.js, que carrega antes de quem o preenche) */
 function render() {
   const { tela, args } = rotaAtual();
 
   if (PUBLICAS.includes(tela)) { renderPublico(tela, args); return; }
-  if (!AUTH.temCracha()) { telaEntrar(); return; }
+  if (!AUTH.temCracha()) { telaEntrar(); pintarAvisoAba(); return; }
 
   montarShell();
+  pintarAvisoAba();
   // O <datalist> tem de existir no documento para o list= dos campos funcionar.
   // Reescrito a cada render porque o catálogo pode ter acabado de ser trazido.
   let dl = document.getElementById('caixaDatalist');
@@ -347,6 +380,7 @@ window.addEventListener('hashchange', async () => {
     if(!await permitirSaidaEdicao())return;
     location.hash=destino;return;
   }
+  if (!PUBLICAS.includes(rotaAtual().tela) && !_controleAbasIniciado) await iniciarControleAbas();
   S.formAberto = false;
   render(); window.scrollTo(0, 0);
 });
@@ -355,6 +389,16 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape' && !e.defaultPrevented && document.body.classList.contains('menu-aberto') && !document.querySelector('.fundo-modal')){
     document.body.classList.remove('menu-aberto');sincronizarMenuAcessivel();document.getElementById('btnMenu')?.focus();
   }
+});
+window.addEventListener('storage', async e => {
+  if (e.key !== 'compras_cracha') return;
+  invalidarSessaoDados();
+  S.reg = regVazio(); S.cfg = null; S.fila = []; S.formAberto = false; S.formSujo = false;
+  S.usuarioId = ''; S.perfil = 'obra'; S.quem = '';
+  // O token muda antes das demais chaves no login da outra aba. Não recuperar
+  // seu cache com a identidade antiga: a próxima consulta define o novo papel.
+  render();
+  if (AUTH.temCracha()) puxar();
 });
 document.addEventListener('domo:dados', renderSeSeguro);
 document.addEventListener('domo:status', pintarMenuSeguro);
@@ -367,6 +411,7 @@ document.addEventListener('domo:sempermissao', (e) => {
 });
 document.addEventListener('domo:semsenha', () => {
   if (!AUTH.temCracha()) return;
+  invalidarSessaoDados();
   AUTH.esquecer();
   toast('Sua sessão venceu. Entre de novo.', 'ruim');
   render();
@@ -410,12 +455,18 @@ function telaEntrar() {
     document.getElementById('btnEntrar').disabled = true;
     try {
       if(S.fila.length && S.usuarioId && usuario !== S.usuarioId)throw new Error('Há alterações pendentes de outro usuário neste aparelho. Entre com o usuário anterior para sincronizar primeiro.');
+      exigirAbaEscrita();
       const r = await AUTH.login(usuario, senha);
+      invalidarSessaoDados();
       if(S.usuarioId && (r.usuario||usuario)!==S.usuarioId){await limparCacheLocal();S.reg=regVazio();S.cfg=null;S.ultimoPull=0;}
       S.quem = r.nome || usuario;
       S.usuarioId = r.usuario || usuario;
       S.acessoProprio = true;
       S.perfil = PAPEL_PERFIL[r.papel] || 'obra';
+      // A restrição vale imediatamente, mesmo se a consulta seguinte falhar.
+      S.reg = registrosVisiveisLocais(S.reg);
+      S.cfg = cfgVisivelLocal(S.cfg);
+      await gravarCache();
       localStorage.setItem(K.quem, S.quem);
       localStorage.setItem(K.perfil, S.perfil);
       localStorage.setItem(K.usuario, S.usuarioId);
@@ -787,6 +838,7 @@ function ligarSenhaEAparelho(el) {
     if (a !== b) { toast('As duas senhas não são iguais', 'ruim'); return; }
     try {
       // A senha é da equipe-auth (Central de Acessos), não deste app.
+      exigirAbaEscrita();
       await AUTH.trocarMinhaSenha(atual, a);
       toast('Senha trocada', 'bom');
       ['senhaAtual', 'senhaNova', 'senhaNova2'].forEach((id) => { document.getElementById(id).value = ''; });
@@ -797,6 +849,7 @@ function ligarSenhaEAparelho(el) {
   if (bn) bn.addEventListener('click', () => {
     const n = document.getElementById('meuNome').value.trim();
     if (!n) return;
+    try { exigirAbaEscrita(); } catch(e) { toast(e.message, 'ruim'); return; }
     S.quem = n; localStorage.setItem(K.quem, n); toast('Nome salvo', 'bom'); pintarMenu('config');
   });
 
@@ -836,7 +889,7 @@ function ligarAcessosEquipe() {
         : '<p class="legenda">Nenhuma conta ainda — crie a primeira.</p>';
       caixa.querySelectorAll('[data-remover]').forEach((b) => b.addEventListener('click', async () => {
         if (!await confirmar('Remover o acesso de "' + b.dataset.remover + '" ao Compras?', { perigo: true, ok: 'Remover' })) return;
-        try { await AUTH.removerConta(b.dataset.remover); toast('Acesso removido', 'bom'); desenhar(); }
+        try { exigirAbaEscrita(); await AUTH.removerConta(b.dataset.remover); toast('Acesso removido', 'bom'); desenhar(); }
         catch (e) { toast(e.message, 'ruim'); }
       }));
     } catch (e) {
@@ -865,6 +918,7 @@ function ligarAcessosEquipe() {
           const d = lerCampos(fundo.querySelector('#fConta'));
           if (!d.usuario || !d.senha) { toast('Preencha usuário e senha', 'ruim'); return; }
           try {
+            exigirAbaEscrita();
             await AUTH.salvarConta({ usuario: d.usuario, nome: d.nome, papel: d.papel, senha: d.senha });
             fecharEste(fundo); toast('Acesso criado', 'bom'); desenhar();
           } catch (e) { toast(e.message, 'ruim'); }
@@ -908,6 +962,7 @@ TELAS.config = function (el) {
   }
 
   el.innerHTML =
+    (typeof avisoCadastroEmpresa === 'function' ? avisoCadastroEmpresa(emp) : '') +
     '<div class="cartao" id="cEmpresa">' +
       '<h3>🏢 Dados da empresa</h3>' +
       '<p class="legenda">Vão no cabeçalho da ordem de compra e no cartão que você manda para o fornecedor te cadastrar.</p>' +
@@ -1461,6 +1516,8 @@ async function telaVerPublico(args) {
 
 /* ── Partida ───────────────────────────────────────────────────────────────── */
 async function iniciarCompras(){
+  if (PUBLICAS.includes(rotaAtual().tela)) { render(); return; }
+  await iniciarControleAbas();
   await lerCache();
   render();
   if (AUTH.temCracha()) puxar();

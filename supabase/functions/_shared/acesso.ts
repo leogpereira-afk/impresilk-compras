@@ -139,7 +139,7 @@ export const perfilDe = (quem: Quem | null) => (quem && PERFIS[quem.perfil]) ? q
 // Os campos que a leitura esconde de quem não pode ver preço.
 const CAMPOS_VALOR = ["preco", "total", "totalLiquido", "totalBruto", "desconto", "frete",
   "valor", "liquido", "bruto", "retencao", "adiantamento", "condicaoPagamento", "banco",
-  "dadosBancarios", "tokenPublico", "token"];
+  "dadosBancarios", "seguro", "difalValor", "tokenPublico", "token"];
 
 /* ── O que o solicitante pode mexer em cada coleção ─────────────────────────
    Esconder a tela no menu não protege nada: a porta é o servidor. */
@@ -203,11 +203,18 @@ export function motivoRecusa(quem: Quem | null, colecao: string, registro: any, 
   if (colecao === "sc") {
     if (atual && atual.situacao !== "nova") return "a solicitação já saiu da fila";
     if (registro.situacao && registro.situacao !== "nova") return "solicitante não aprova a própria solicitação";
+    const editaveis = ["id", "obraId", "obra", "os", "osNumero", "solicitante", "setor", "urgencia", "necessidadeEm", "justificativa", "itens", "situacao", "origem", "historico", "atualizadoEm", "atualizadoPor"];
+    for (const k of Object.keys(registro)) {
+      if (editaveis.includes(k)) continue;
+      const vinculoVazioNovo = !atual && ["ocIds", "cotIds"].includes(k) && Array.isArray(registro[k]) && !registro[k].length;
+      if (!vinculoVazioNovo && !igual(registro[k], atual?.[k])) return 'solicitante não altera "' + k + '" em sc';
+    }
     return "";
   }
 
   if (!atual) return "solicitante não cria ordem de compra";
   if (colecao === "oc") {
+    if (["rascunho", "cancelada"].includes(atual.situacao) && registro.situacao && registro.situacao !== atual.situacao) return "solicitante não conclui uma ordem em rascunho ou cancelada";
     if (registro.situacao && registro.situacao !== atual.situacao &&
         !["parcial", "entregue"].includes(registro.situacao)) return "solicitante só registra recebimentos";
     if (["rascunho", "cancelada"].includes(atual.situacao) &&

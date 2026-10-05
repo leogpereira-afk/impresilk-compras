@@ -12,7 +12,7 @@ for (const instante of ['2026-09-09T12:00:00-03:00','2026-09-09T23:30:00-03:00']
   }
 }
 const app=readFileSync('app.js','utf8');
-const ctx=vm.createContext({S:{fila:[],erroSync:'',formSujo:true,formAberto:false},navigator:{onLine:true},toast:(...a)=>ctx.messages.push(a),messages:[],gravarFila:()=>true,subirFila:async()=>{},puxar:async()=>{ctx.S.erroSync='Falha de conexão';},document:{querySelector:()=>null,activeElement:null},PUBLICAS:[],rotaAtual:()=>({tela:'compras'}),pintarMenuSeguro(){},renders:0,render(){ctx.renders++;}});
+const ctx=vm.createContext({S:{fila:[],erroSync:'',formSujo:true,formAberto:false},navigator:{onLine:true},toast:(...a)=>ctx.messages.push(a),messages:[],abaPodeEscrever:()=>true,gravarFila:()=>true,subirFila:async()=>{},puxar:async()=>{ctx.S.erroSync='Falha de conexão';},document:{querySelector:()=>null,activeElement:null},PUBLICAS:[],rotaAtual:()=>({tela:'compras'}),pintarMenuSeguro(){},renders:0,render(){ctx.renders++;}});
 vm.runInContext(app.slice(app.indexOf('function renderSeSeguro()'),app.indexOf('function pintarMenuSeguro()')),ctx);
 vm.runInContext(app.slice(app.indexOf('async function sincronizarAgora()'),app.indexOf('// Sair =')),ctx);
 await vm.runInContext('sincronizarAgora()',ctx);

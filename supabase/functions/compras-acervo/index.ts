@@ -159,6 +159,7 @@ Deno.serve(async (req) => {
       case "meta": {
         const meta = await lerUm(META, body.id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
+        if (!meta.pronto && !uploadProprio(meta, eu)) return json({ ok: false, error: "Envio ainda não compartilhado." }, 403);
         return json({ ok: true, meta });
       }
 
@@ -167,6 +168,7 @@ Deno.serve(async (req) => {
         if (!Number.isInteger(idx) || idx < 0) return json({ ok: false, error: "Índice de parte inválido" }, 400);
         const meta = await lerUm(META, body.id);
         if (!meta) return json({ ok: false, error: "Arquivo não encontrado" }, 404);
+        if (!meta.pronto && !uploadProprio(meta, eu)) return json({ ok: false, error: "Envio ainda não compartilhado." }, 403);
         if (idx >= meta.partes) return json({ ok: false, error: "Índice fora do arquivo" }, 400);
         const bytes = await baixarParte(body.id + "/p" + idx);
         if (!bytes) return json({ ok: false, error: "Parte não encontrada" }, 404);

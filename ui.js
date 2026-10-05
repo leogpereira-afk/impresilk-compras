@@ -15,6 +15,17 @@ const esc = (s) => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+function pendenciasCadastroEmpresa(empresa = {}) {
+  return [['cnpj','CNPJ'],['ie','inscrição estadual (ou ISENTO)'],['cep','CEP']]
+    .filter(([campo]) => !String(empresa[campo] || '').trim()).map(([,rotulo]) => rotulo);
+}
+
+function avisoCadastroEmpresa(empresa) {
+  const faltam = pendenciasCadastroEmpresa(empresa);
+  return faltam.length ? '<div class="aviso atencao" role="status"><b>Cadastro da empresa incompleto.</b> Confira ' +
+    esc(faltam.join(', ')) + ' antes de emitir a ordem de compra. Esses dados aparecem no documento enviado ao fornecedor.</div>' : '';
+}
+
 const fmt = {
   brl(n) {
     const v = Number(n) || 0;

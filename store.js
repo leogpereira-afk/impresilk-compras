@@ -53,7 +53,7 @@ function podeEscrever(colecao) {
 // autorizada para exibir preços. A máscara também vale ao recuperar cache,
 // trocar perfil e reabrir o navegador (não apenas no primeiro snapshot).
 const LEITURA_OBRA_LOCAL = ['sc','oc','forn','equipe','doc','proj','trein','mat','transp'];
-const PRIVADO_LOCAL = ['preco','total','totalLiquido','totalBruto','desconto','frete','valor','liquido','bruto','retencao','adiantamento','condicaoPagamento','banco','dadosBancarios','tokenPublico','token'];
+const PRIVADO_LOCAL = ['preco','total','totalLiquido','totalBruto','desconto','frete','seguro','difalValor','valor','liquido','bruto','retencao','adiantamento','condicaoPagamento','banco','dadosBancarios','tokenPublico','token'];
 function registroVisivelLocal(col, registro, perfil = S.perfil) {
   if (perfil !== 'obra') return registro;
   if (!LEITURA_OBRA_LOCAL.includes(col)) return null;
@@ -84,6 +84,69 @@ function cfgVisivelLocal(cfg, perfil = S.perfil) {
   return saida;
 }
 
+// Uma só aba pode alterar o armazenamento compartilhado. Web Locks é um
+// mutex do navegador: não vence por relógio nem é roubado de uma aba suspensa.
+// As outras abas consultam normalmente, mas não alteram fila, cache ou sessão.
+let _controleAbasIniciado = false, _tentativaAba = null;
+function abaPodeEscrever() { return !_controleAbasIniciado || S.abaEscrita === true; }
+function exigirAbaEscrita() {
+  if (!abaPodeEscrever()) {
+    const msg = S.avisoAba || 'Esta aba está somente para consulta. Feche a outra aba e use Assumir edição.';
+    toast(msg, 'ruim'); throw new Error(msg);
+  }
+}
+async function iniciarControleAbas() {
+  if (_controleAbasIniciado && S.abaEscrita) return true;
+  if (_tentativaAba) return _tentativaAba;
+  _controleAbasIniciado = true; S.abaEscrita = false;
+  const semSuporte = 'Este navegador não oferece edição segura em várias abas. Consulte os dados ou abra o Compras em um navegador atualizado para editar.';
+  if (!navigator.locks || typeof navigator.locks.request !== 'function') { S.avisoAba = semSuporte; return false; }
+  _tentativaAba = new Promise(resolve => {
+    Promise.resolve().then(() => navigator.locks.request('compras-escrita-local-v19', {mode:'exclusive',ifAvailable:true}, async lock => {
+      if (!lock) {
+        S.avisoAba = 'Somente consulta: o Compras está aberto para edição em outra aba. Feche a outra aba e clique em Assumir edição.';
+        resolve(false); return;
+      }
+      // A aba pode ter ficado em consulta por horas. Atualizar sua memória é
+      // obrigatório ANTES de liberar qualquer nova escrita ou confirmação.
+      try {
+        S.reg = regVazio(); S.cfg = null; S.fila = [];
+        await lerCache();
+        S.abaEscrita = true; S.avisoAba = '';
+        resolve(true);
+      } catch (e) {
+        S.avisoAba = 'Não foi possível recuperar a fila deste aparelho. Recarregue antes de editar.';
+        resolve(false); return;
+      }
+      // A vida deste documento é a vida do lock; fechar a aba libera o mutex.
+      // Não liberar no logout: uma confirmação antiga ainda pode estar em voo.
+      await new Promise(() => {});
+    })).catch(() => { S.abaEscrita = false; S.avisoAba = semSuporte; resolve(false); });
+  });
+  const resultado = await _tentativaAba; _tentativaAba = null;
+  return resultado;
+}
+
+// Uma resposta pertence à sessão que iniciou a chamada. Logout/login muda a
+// geração antes de limpar dados: nenhuma resposta antiga pode ressuscitá-los.
+let _geracaoSessao = 0;
+const _requisicoesPrivadas = new Set();
+function capturarSessaoDados() {
+  return {geracao:_geracaoSessao,usuario:S.usuarioId,token:typeof AUTH !== 'undefined' && typeof AUTH.cracha === 'function' ? AUTH.cracha() : null};
+}
+function sessaoDadosAtual(s) {
+  const atual = capturarSessaoDados();
+  return s.geracao === atual.geracao && s.usuario === atual.usuario && s.token === atual.token;
+}
+function erroSessaoAlterada() { return Object.assign(new Error('Operação encerrada porque a sessão mudou.'), {canceladoPorSessao:true}); }
+function invalidarSessaoDados() {
+  _geracaoSessao++;
+  for (const ctrl of _requisicoesPrivadas) ctrl.abort();
+  _requisicoesPrivadas.clear();
+  _subindo = null; _puxando = null; S.sincronizando = false;
+}
+const ACOES_CONSULTA_LOCAL = new Set(['ping','snapshot','list','getCfg','backup','log','buscarOS','fornecedoresMubi','produtosMubi','conferenciaMubi','diagMubi','meta','baixarParte','uso']);
+
 /* ── SHA-256 (a senha nunca viaja em texto puro) ───────────────────────────── */
 async function sha256(txt) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(txt));
@@ -92,37 +155,32 @@ async function sha256(txt) {
 
 /* ── Chamada ao servidor ───────────────────────────────────────────────────── */
 async function api(action, dados = {}, opts = {}) {
+  if (!opts.publico && !ACOES_CONSULTA_LOCAL.has(action)) exigirAbaEscrita();
+  const sessao = opts.publico ? null : capturarSessaoDados();
   const headers = { 'Content-Type': 'application/json', 'x-token': TOKEN };
-  // Identidade: o crachá da Central de Acessos. O servidor valida e decide.
   if (!opts.publico && typeof AUTH !== 'undefined' && AUTH.temCracha()) headers['Authorization'] = 'Bearer ' + AUTH.cracha();
   if (S.quem) headers['x-quem'] = encodeURIComponent(S.quem);
-  // Prazo máximo: no 4G da equipe a conexão "pendura" (fica aberta sem
-  // resposta) e sem isso a promessa nunca voltava — travando a tela atrás dela.
   const ctrl = new AbortController();
+  if (sessao) _requisicoesPrivadas.add(ctrl);
   const prazo = setTimeout(() => ctrl.abort(), opts.prazoMs || 60000);
-  let r;
   try {
-    r = await fetch(opts.url || API, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(Object.assign({ action }, dados)),
-      signal: ctrl.signal
+    const r = await fetch(opts.url || API, {
+      method: 'POST', headers, body: JSON.stringify(Object.assign({ action }, dados)), signal: ctrl.signal
     });
+    if (sessao && !sessaoDadosAtual(sessao)) throw erroSessaoAlterada();
+    let j = null;
+    try { j = await r.json(); } catch { /* resposta inválida */ }
+    if (sessao && !sessaoDadosAtual(sessao)) throw erroSessaoAlterada();
+    if (!r.ok) {
+      const e = new Error((j && (j.error || j.message)) || ('Erro ' + r.status));
+      e.status = r.status; e.semSenha = !!(j && j.semSenha); e.semPermissao = !!(j && j.semPermissao);
+      throw e;
+    }
+    return j;
   } catch (e) {
-    clearTimeout(prazo);
+    if (sessao && !sessaoDadosAtual(sessao)) throw erroSessaoAlterada();
     throw (e && e.name === 'AbortError') ? new Error('A internet demorou demais para responder') : e;
-  }
-  clearTimeout(prazo);
-  let j = null;
-  try { j = await r.json(); } catch { j = null; }
-  if (!r.ok) {
-    const e = new Error((j && (j.error || j.message)) || ('Erro ' + r.status));
-    e.status = r.status;
-    e.semSenha = !!(j && j.semSenha);
-    e.semPermissao = !!(j && j.semPermissao);
-    throw e;
-  }
-  return j;
+  } finally { clearTimeout(prazo); _requisicoesPrivadas.delete(ctrl); }
 }
 
 const apiArq = (action, dados = {}, opts = {}) => api(action, dados, Object.assign({ url: API_ARQ }, opts));
@@ -140,7 +198,7 @@ async function lerCache() {
   S.seqFila = S.fila.reduce((m, f) => Math.max(m, Number(f.seq) || 0), 0);
   let faltando = false;
   for (const f of S.fila) if (!f.seq) { f.seq = ++S.seqFila; faltando = true; }
-  if (faltando) { try { localStorage.setItem(K.fila, JSON.stringify(S.fila)); } catch { /* segue */ } }
+  if (faltando && abaPodeEscrever()) { try { localStorage.setItem(K.fila, JSON.stringify(S.fila)); } catch { /* segue */ } }
   S.quem = localStorage.getItem(K.quem) || '';
   S.senhaHash = localStorage.getItem(K.senha) || '';
   S.perfil = localStorage.getItem(K.perfil) || 'obra';
@@ -148,8 +206,10 @@ async function lerCache() {
   S.acessoProprio = !!S.usuarioId;
   S.reg = registrosVisiveisLocais(S.reg);
   S.cfg = cfgVisivelLocal(S.cfg);
-  // Se o cache tiver se perdido (memória cheia), a fila reconstrói o que ainda
-  // não subiu — senão o trabalho feito sem sinal some da tela ao reabrir o app.
+  // Se o cache tiver se perdido, recuperar o trabalho ainda não confirmado.
+  reconstituirFilaLocal();
+}
+function reconstituirFilaLocal() {
   for (const f of S.fila) {
     const visivel = registroVisivelLocal(f.colecao, f.registro);
     if (!visivel) continue;
@@ -206,8 +266,11 @@ async function lerSnapshotLocal() {
 function gravarCache() {
   // Clonar agora: uma gravação posterior nunca deve trocar o conteúdo desta.
   _cacheVersao = Math.max(Date.now(), _cacheVersao + 1);
+  if (!abaPodeEscrever()) return Promise.resolve();
+  const sessao = capturarSessaoDados();
   const snapshot = JSON.parse(JSON.stringify({reg:registrosVisiveisLocais(S.reg),cfg:cfgVisivelLocal(S.cfg),em:S.ultimoPull,salvoEm:_cacheVersao,usuarioId:S.usuarioId}));
   _cacheEscrita = _cacheEscrita.catch(() => {}).then(async () => {
+    if (!sessaoDadosAtual(sessao) || !abaPodeEscrever()) return;
     try {
       await cacheDB('put', snapshot);
       // Só remove o snapshot legado depois de confirmar a transação nova.
@@ -227,6 +290,7 @@ function gravarCache() {
   return _cacheEscrita;
 }
 async function limparCacheLocal() {
+  exigirAbaEscrita();
   // Mesmo se o IndexedDB estiver temporariamente indisponível para apagar,
   // a cópia antiga não pode ressurgir no próximo login/reload.
   _cacheVersao = Math.max(Date.now(), _cacheVersao + 1);
@@ -240,6 +304,7 @@ async function limparCacheLocal() {
 // A fila é o que segura o trabalho feito sem internet: se ela não couber no
 // aparelho, o usuário PRECISA saber (o cache pode falhar calado, a fila não).
 function gravarFila(fila = S.fila) {
+  if (!abaPodeEscrever()) { toast(S.avisoAba, 'ruim'); return false; }
   try {
     localStorage.setItem(K.fila, JSON.stringify(fila));
     return true;
@@ -271,6 +336,7 @@ const achar = (col, id) => (S.reg[col] || []).find((r) => r.id === id) || null;
 /* ── Gravação ──────────────────────────────────────────────────────────────── */
 // Salva no aparelho na hora e empurra pra fila. Devolve o registro local.
 function salvar(col, registro, opts = {}) {
+  exigirAbaEscrita();
   const id = registro.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
   const local = Object.assign({}, achar(col, id) || {}, registro, {
     id,
@@ -279,7 +345,18 @@ function salvar(col, registro, opts = {}) {
     _pendente: true
   });
   if (!local.criadoEm) { local.criadoEm = local.atualizadoEm; local.criadoPor = S.quem || '—'; }
+  // A intenção pertence a esta chamada, não ao registro já aberto. Uma edição
+  // depois de receber não pode herdar o marcador e perder campos comerciais.
+  if (col === 'oc' && !Object.prototype.hasOwnProperty.call(registro, '_operacao')) delete local._operacao;
 
+  const anteriorPendente = S.fila.find(f => f.colecao === col && f.registro.id === id);
+  if (col === 'oc' && local._operacao === 'recebimento' && anteriorPendente && anteriorPendente.registro._operacao !== 'recebimento') {
+    // Receber depois de editar offline não transforma a edição inteira em
+    // recebimento (o servidor ignoraria seus campos comerciais).
+    delete local._operacao;
+    if (anteriorPendente.registro._versaoBase !== undefined) local._versaoBase = anteriorPendente.registro._versaoBase;
+    else delete local._versaoBase;
+  }
   const proximaFila = S.fila.filter((f) => !(f.colecao === col && f.registro.id === id));
   proximaFila.push({ colecao: col, registro: local, seq: S.seqFila + 1 });
   if (!gravarFila(proximaFila)) throw new Error('Não foi possível guardar a alteração. Libere espaço e tente novamente; o formulário foi preservado.');
@@ -307,16 +384,18 @@ function historiar(registro, o_que) {
   return h;
 }
 
-let _subindo = false;
+let _subindo = null;
 async function subirFila() {
-  if (_subindo || !S.fila.length || !navigator.onLine) return;
-  _subindo = true;
+  if (_subindo || !S.fila.length || !navigator.onLine || !abaPodeEscrever()) return;
+  const rodada = {}, sessao = capturarSessaoDados();
+  _subindo = rodada;
   const enviando = S.fila.filter(f => !f.erro).slice(0, 25);
-  if (!enviando.length) { _subindo = false; return; }
+  if (!enviando.length) { _subindo = null; return; }
   try {
     const r = await api('salvarLote', {
       itens: enviando.map((f) => ({ colecao: f.colecao, registro: limparParaEnvio(f.registro) }))
     });
+    if (!sessaoDadosAtual(sessao) || !abaPodeEscrever()) return;
     // Tira da fila SÓ o que foi enviado (pelo número da entrada). Se o usuário
     // mexeu de novo no mesmo registro durante o envio, a alteração nova fica.
     // Remove pelas PRÓPRIAS entradas enviadas (identidade), não pelo número —
@@ -350,6 +429,7 @@ async function subirFila() {
     document.dispatchEvent(new CustomEvent('domo:dados'));
     if (S.fila.some(f => !f.erro)) setTimeout(subirFila, 300);
   } catch (e) {
+    if (!sessaoDadosAtual(sessao) || e.canceladoPorSessao) return;
     S.erroSync = e.message || 'falha ao enviar';
     if (e.semSenha) document.dispatchEvent(new CustomEvent('domo:semsenha'));
     // Ação inteira negada (não é mais o caso do salvarLote, que recusa item a
@@ -365,8 +445,8 @@ async function subirFila() {
     }
     console.warn('fila:', e.message);
   } finally {
-    _subindo = false;
-    document.dispatchEvent(new CustomEvent('domo:status'));
+    if (_subindo === rodada) _subindo = null;
+    if (sessaoDadosAtual(sessao)) document.dispatchEvent(new CustomEvent('domo:status'));
   }
 }
 
@@ -383,15 +463,25 @@ function assinaturaDados() {
 }
 
 /* ── Puxar do servidor ─────────────────────────────────────────────────────── */
-let _puxando = false;
+let _puxando = null;
 async function puxar() {
+  if (typeof PUBLICAS !== 'undefined' && typeof rotaAtual === 'function' && PUBLICAS.includes(rotaAtual().tela)) return;
   if (_puxando || !navigator.onLine || (typeof AUTH !== 'undefined' && !AUTH.temCracha())) return;
-  _puxando = true;
+  const rodada = {}, sessao = capturarSessaoDados();
+  _puxando = rodada;
   S.sincronizando = true;
   document.dispatchEvent(new CustomEvent('domo:status'));
   try {
     await subirFila();
+    if (!sessaoDadosAtual(sessao)) return;
     const r = await api('snapshot');
+    if (!sessaoDadosAtual(sessao)) return;
+    if (!abaPodeEscrever()) {
+      // A fila pode ter sido confirmada/editada pela aba principal enquanto
+      // esta consultava o servidor; não manter sua cópia velha indefinidamente.
+      try { const fila = JSON.parse(localStorage.getItem(K.fila) || '[]'); if (Array.isArray(fila)) S.fila = fila; } catch { /* conservar última leitura válida */ }
+      reconstituirFilaLocal();
+    }
     const perfilServidor = r.eu?.perfil || S.perfil;
     const novo = regVazio();
     for (const reg of (r.registros || [])) {
@@ -434,6 +524,7 @@ async function puxar() {
       S.usuarioId = r.eu.proprio ? r.eu.id : '';
       if (r.eu.proprio && r.eu.nome) S.quem = r.eu.nome;
       try {
+        if (!abaPodeEscrever()) throw new Error('Aba de consulta');
         localStorage.setItem(K.perfil, S.perfil);
         localStorage.setItem(K.usuario, S.usuarioId);
         if (S.quem) localStorage.setItem(K.quem, S.quem);
@@ -453,12 +544,12 @@ async function puxar() {
       document.dispatchEvent(new CustomEvent('domo:dados'));
     }
   } catch (e) {
+    if (!sessaoDadosAtual(sessao) || e.canceladoPorSessao) return;
     S.erroSync = e.message || 'falha ao baixar';
     if (e.semSenha) document.dispatchEvent(new CustomEvent('domo:semsenha'));
   } finally {
-    _puxando = false;
-    S.sincronizando = false;
-    document.dispatchEvent(new CustomEvent('domo:status'));
+    if (_puxando === rodada) { _puxando = null; S.sincronizando = false; }
+    if (sessaoDadosAtual(sessao)) document.dispatchEvent(new CustomEvent('domo:status'));
   }
 }
 

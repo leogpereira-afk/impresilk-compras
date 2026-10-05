@@ -1,4 +1,4 @@
-import { validarDocumento, totalRecebido, situacaoSolicitacao } from "../_shared/integridade.ts";
+import { validarDocumento, totalRecebido, situacaoSolicitacao, validarCompromissos } from "../_shared/integridade.ts";
 import { consultarVendedoresPublicos } from "../_shared/vendedores.ts";
 import { validarRede, ErroRede } from "../_shared/rede.ts";
 // ============================================================================
@@ -35,7 +35,7 @@ import {
   db, agora, idNovo, tokenCurto, lerUm, gravarUm, lerTudo, apagarDeVez,
   lerCfgBruta, gravarCfg, proximoNumero, guardarIndiceNumero, lerNumeracao,
   definirNumeracao, registrarLog, lerLog, gravarBackup, apagarArquivo,
-  marcarMudanca, atualizarRegistro,
+  marcarMudanca, atualizarRegistro, atualizarNegocio,
 } from "../_shared/dados.ts";
 
 import { consultarMubi, parametrosConferencia, normalizarConferencia } from "../_shared/mubisys.ts";
@@ -157,6 +157,10 @@ function arquivosDoRegistro(o: any): string[] {
   return Array.from(new Set(ids));
 }
 
+function solicitacoesVinculadas(registro: any): string[] {
+  return [...new Set<string>([...(registro?.scIds || []), ...(registro?.itens || []).map((i: any) => i.origemScId)].filter((id: any) => typeof id === "string" && id))];
+}
+
 /* ── Gravação: onde mora a inteligência do sistema ─────────────────────────── */
 async function gravar(col: string, registro: any, por: string, quem?: Quem | null): Promise<any> {
   if (!Object.hasOwn(COLECOES, col)) throw new ErroRede("Coleção desconhecida: " + col);
@@ -164,16 +168,40 @@ async function gravar(col: string, registro: any, por: string, quem?: Quem | nul
   const original = { ...registro };
   delete original._col;
   delete original._pendente;
+  const operacao = original._operacao;
+  const versaoBase = original._versaoBase;
+  delete original._operacao;
+  delete original._versaoBase;
+  if (col === "oc") delete original.versao;
   let numeroReservado: number | undefined;
-  const salvo = await atualizarRegistro(col, id, async (antigo) => {
-    registro = quem ? reporEscondidos(quem, col, original, antigo) : original;
+  const atualizar = ["sc", "oc", "cot"].includes(col) ? atualizarNegocio : atualizarRegistro;
+  const salvo = await atualizar(col, id, async (antigo, contexto: any[] = []) => {
+    const lerRelacionado = async (c: string, chave: string) => contexto.find(r => r._col === c && r.id === chave) || null;
+    let entrada = original;
+    if (col === "oc" && operacao === "recebimento") {
+      if (!antigo || ["rascunho", "cancelada"].includes(antigo.situacao)) throw new ErroRede("A ordem precisa estar emitida para registrar recebimentos.");
+      entrada = { id };
+      // O recebimento não edita referências do ERP. O gate compara esse campo
+      // protegido com o registro atual; ausência no patch não significa remoção.
+      // Sempre parte do snapshot do servidor, inclusive após uma disputa CAS.
+      if ("referenciasErp" in antigo) entrada.referenciasErp = antigo.referenciasErp;
+      for (const k of ["recebimentos", "historico", "nf", "recebidoEm"]) if (k in original) entrada[k] = original[k];
+    }
+    if (!antigo || col === "sc" || col === "oc") { entrada = { ...entrada }; delete entrada.criadoEm; delete entrada.criadoPor; }
+    registro = quem ? reporEscondidos(quem, col, entrada, antigo) : entrada;
     if (quem) {
       const motivo = motivoRecusa(quem, col, registro, antigo);
       if (motivo) throw new ErroRede(motivo);
     }
+    if (col === "oc" && antigo && operacao !== "recebimento") {
+      const livres = ["id", "_col", "_pendente", "situacao", "recebimentos", "historico", "nf", "recebidoEm", "encerradaComFalta", "atualizadoEm", "atualizadoPor", "total", "totalLiquido", "codigo", "numero", "tokenPublico"];
+      const alterou = Object.keys(registro).some(k => !livres.includes(k) && JSON.stringify(registro[k] ?? null) !== JSON.stringify(antigo[k] ?? null));
+      if (alterou && (typeof versaoBase !== "number" || versaoBase !== (antigo.versao || 0))) throw new ErroRede("Esta ordem mudou desde a edição. Atualize e revise os itens antes de salvar; seus recebimentos podem ser reenviados separadamente.");
+    }
     const novo: any = { ...(antigo || {}), ...registro, id };
     delete novo._col;
     delete novo._pendente;
+    if (col === "oc" && antigo) for (const k of ["criadoEm", "criadoPor", "codigo", "numero", "tokenPublico"]) if (k in antigo) novo[k] = antigo[k];
 
     for (const campo of CAMPOS_UNIAO) {
       if (antigo && (antigo[campo] || registro[campo])) novo[campo] = unirPorId(antigo[campo], registro[campo]);
@@ -185,12 +213,17 @@ async function gravar(col: string, registro: any, por: string, quem?: Quem | nul
       }
     }
 
+    if (col === "oc" && antigo?.cotacaoId && antigo.cotacaoId !== novo.cotacaoId) throw new ErroRede("A cotação de origem de uma ordem existente não pode ser trocada.");
     if (col === "oc" && novo.cotacaoId) {
-      const cotacao = await lerUm("cot", novo.cotacaoId);
+      const cotacao = await lerRelacionado("cot", novo.cotacaoId);
       if (!cotacao || cotacao.apagadoEm || cotacao.situacao === "cancelada") throw new ErroRede("A cotação de origem não está disponível.");
+      for (const i of novo.itens || []) {
+        const originalCot = (cotacao.itens || []).find((x: any) => x.id === i.id);
+        if (!originalCot || (i.unid && originalCot.unid && String(i.unid).trim().toLowerCase() !== String(originalCot.unid).trim().toLowerCase())) throw new ErroRede("O item ou unidade não corresponde à cotação de origem. Atualize antes de comprar.");
+      }
       if (!antigo) {
         if (id !== "cot-" + novo.cotacaoId) throw new ErroRede("Atualize o aplicativo antes de gerar a ordem desta cotação.");
-        const ordens = await lerTudo(["oc"], NOMES_COLECOES);
+        const ordens = contexto.filter(r => r._col === "oc");
         if (cotacao.situacao !== "aberta" || (cotacao.ocId && cotacao.ocId !== id) ||
             ordens.some(o => o.cotacaoId === novo.cotacaoId && o.id !== id)) throw new ErroRede("Esta cotação já gerou uma ordem. Abra a ordem existente.");
       } else {
@@ -200,7 +233,7 @@ async function gravar(col: string, registro: any, por: string, quem?: Quem | nul
     }
     if (col === "cot" && novo.situacao === "aprovada") {
       const escolhido = (novo.fornecedores || []).filter((f: any) => f.escolhido);
-      const ordem = novo.ocId ? await lerUm("oc", novo.ocId) : null;
+      const ordem = novo.ocId ? await lerRelacionado("oc", novo.ocId) : null;
       if (escolhido.length !== 1 || !ordem || ordem.cotacaoId !== id) throw new ErroRede("Confirme a ordem de compra e uma única proposta escolhida antes de concluir a cotação.");
       const f = escolhido[0];
       if ((f.fornecedorId || f.cnpj || f.nome || "") !== (ordem.fornecedorId || ordem.fornecedor?.cnpj || ordem.fornecedor?.nome || "")) throw new ErroRede("Outro fornecedor já foi escolhido nesta compra. Atualize a cotação para conferir.");
@@ -233,11 +266,14 @@ async function gravar(col: string, registro: any, por: string, quem?: Quem | nul
       }
     }
     if (col === "sc") {
-      const relacionadas = await lerTudo(["oc", "cot"], NOMES_COLECOES);
+      const relacionadas = contexto.filter(r => ["oc", "cot"].includes(r._col));
       novo.situacao = situacaoSolicitacao(novo, relacionadas.filter(r => r._col === "oc"), relacionadas.filter(r => r._col === "cot"));
     }
 
-    if (!novo.criadoEm) { novo.criadoEm = agora(); novo.criadoPor = por || registro.criadoPor || "—"; }
+    validarCompromissos(col, novo, antigo, contexto);
+    if (col === "oc") novo.versao = (antigo?.versao || 0) + 1;
+
+    if (!antigo || !novo.criadoEm) { novo.criadoEm = agora(); novo.criadoPor = por || registro.criadoPor || "—"; }
     novo.atualizadoEm = agora();
     novo.atualizadoPor = por || novo.atualizadoPor || "—";
 
@@ -262,15 +298,15 @@ async function gravar(col: string, registro: any, por: string, quem?: Quem | nul
     return novo;
   });
   await marcarMudanca(col);
-  if (["oc", "cot"].includes(col)) await atualizarSolicitacoes(salvo.scIds || [], por);
+  if (["oc", "cot"].includes(col)) await atualizarSolicitacoes(solicitacoesVinculadas(salvo), por);
   return { ...salvo, _col: col };
 }
 
 async function atualizarSolicitacoes(ids: string[], por: string) {
   for (const id of new Set(ids)) {
-    await atualizarRegistro("sc", id, async (atual) => {
+    await atualizarNegocio("sc", id, async (atual, contexto) => {
       if (!atual || atual.apagadoEm) return null;
-      const relacionados = await lerTudo(["oc", "cot"], NOMES_COLECOES);
+      const relacionados = contexto.filter(r => ["oc", "cot"].includes(r._col));
       const situacao = situacaoSolicitacao(atual, relacionados.filter(r => r._col === "oc"), relacionados.filter(r => r._col === "cot"));
       if (situacao === atual.situacao) return null;
       return { ...atual, situacao, atualizadoEm: agora(), atualizadoPor: por,
@@ -646,8 +682,11 @@ Deno.serve(async (req) => {
         const r = await lerUm(colecao, id);
         if (!r) return json({ ok: true });
         if (!Object.hasOwn(COLECOES, colecao)) return json({ error: "Coleção inválida" }, 400);
-        const removido = await atualizarRegistro(colecao, id, atual => atual ? ({ ...atual, apagadoEm: agora(), apagadoPor: por }) : null);
-        if (["oc", "cot"].includes(colecao)) await atualizarSolicitacoes(removido?.scIds || [], por);
+        const removido = await atualizarRegistro(colecao, id, atual => {
+          if (colecao === "oc" && atual?.recebimentos?.length) throw new ErroRede("Esta ordem já recebeu materiais. Use Encerrar com falta para preservar o recebido.");
+          return atual ? ({ ...atual, apagadoEm: agora(), apagadoPor: por }) : null;
+        });
+        if (["oc", "cot"].includes(colecao)) await atualizarSolicitacoes(solicitacoesVinculadas(removido), por);
         await marcarMudanca(colecao);
         await registrarLog({ acao: "apagou", por, colecao, id, codigo: r.codigo || r.nome });
         return json({ ok: true });
@@ -694,13 +733,16 @@ Deno.serve(async (req) => {
         const r = await lerUm(colecao, id);
         if (!r) return json({ ok: false, error: "Não encontrado" }, 404);
         if (!Object.hasOwn(COLECOES, colecao)) return json({ error: "Coleção inválida" }, 400);
-        const restaurado = await atualizarRegistro(colecao, id, atual => {
+        const atualizar = ["sc", "oc", "cot"].includes(colecao) ? atualizarNegocio : atualizarRegistro;
+        const restaurado = await atualizar(colecao, id, (atual, contexto: any[] = []) => {
           if (!atual) throw new ErroRede("Registro não encontrado");
-          delete atual.apagadoEm; delete atual.apagadoPor;
-          return { ...atual, atualizadoEm: agora(), atualizadoPor: por };
+          const novo = { ...atual, atualizadoEm: agora(), atualizadoPor: por };
+          delete novo.apagadoEm; delete novo.apagadoPor;
+          validarCompromissos(colecao, novo, atual, contexto);
+          return novo;
         });
         await marcarMudanca(colecao);
-        if (["oc", "cot"].includes(colecao)) await atualizarSolicitacoes(restaurado.scIds || [], por);
+        if (["oc", "cot"].includes(colecao)) await atualizarSolicitacoes(solicitacoesVinculadas(restaurado), por);
         return json({ ok: true, registro: restaurado });
       }
 

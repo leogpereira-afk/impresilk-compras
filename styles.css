@@ -298,6 +298,9 @@ body.modal-aberto > #toasts { display: none; }
 .filtros { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
 .filtros input[type=search] { max-width: 280px; }
 .filtros select { max-width: 200px; }
+.filtros-acervo { align-items: flex-end; }
+.filtros-acervo .campo { margin-bottom: 0; flex: 1 1 170px; }
+.filtros-acervo .campo input,.filtros-acervo .campo select { max-width: 100%; width: 100%; }
 
 .busca-topo { flex: 1; max-width: 340px; }
 
@@ -557,6 +560,8 @@ button, .btn { min-height: 40px; }
 .forn-inicial { display:grid; place-items:center; flex:0 0 42px; width:42px; height:42px; border-radius:12px; background:var(--azul-claro); color:var(--azul); font-size:1.05rem; font-weight:700; }
 .forn-identidade h3 { margin:0 0 6px; font-size:.98rem; line-height:1.4; overflow-wrap:anywhere; }
 .forn-identidade p { margin:0; color:var(--texto-fraco); font-size:.78rem; line-height:1.5; overflow-wrap:anywhere; }
+.forn-vinculo { margin-bottom:6px; white-space:normal; }
+.forn-vinculo-resumo { padding:0 24px 16px; margin:0; }
 .forn-produtos { min-width:0; }
 .forn-produtos p { margin:0; font-size:.88rem; line-height:1.5; overflow-wrap:anywhere; }
 .forn-produtos small { display:block; margin-top:6px; color:var(--texto-fraco); line-height:1.5; overflow-wrap:anywhere; }

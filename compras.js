@@ -236,6 +236,13 @@ function lerItens(raiz, comPreco) {
 function ligarItens(caixa, comPreco) {
   const ligar = (linha) => {
     const sm = linha.querySelector('[data-i=materialId]'), un = linha.querySelector('[data-i=unid]');
+    const recebido = comPreco && caixa.id === 'itensOC' && S.ocEditando && jaRecebido(S.ocEditando, linha.dataset.id) > 0;
+    if (recebido) {
+      un.disabled = true; if (sm) sm.disabled = true;
+      un.title = 'Este item já teve recebimento. A unidade precisa ser preservada.';
+      if (sm) sm.title = 'Este item já teve recebimento. Preserve o material do pedido.';
+      const montar = linha.querySelector('[data-montar-produto]'); if (montar) montar.disabled = true;
+    }
     if (sm) sm.addEventListener('change', () => { const m = achar('mat', sm.value); if (!m) return; linha.dataset.nomeFornecedor = ''; linha.dataset.codigoFornecedor = ''; linha.querySelector('[data-i=descricao]').value = descricaoMaterialPadrao(m); if (![...un.options].some(o => o.value === m.unidade)) un.add(new Option(m.unidade, m.unidade)); un.value = m.unidade; });
     un.addEventListener('change', async () => {
       const m = sm && achar('mat', sm.value);
@@ -482,6 +489,7 @@ function telaSolicitacao(el, id) {
   const saldoCompra = itensPendentesSC(s);
   const compraParcial = saldoCompra.length > 0 && saldoScPorItem(s).some(x => x.comprado > 0);
   const decide = typeof podeVer !== 'function' || podeVer('cotacoes');
+  const veCompras = typeof podeVer !== 'function' || podeVer('compras');
   cabecalho(s.codigo || 'Solicitação', (s.obra || '') + ' · ' + (s.setor || ''),
     '<a class="btn" href="#/solicitacoes">← Voltar</a>');
 
@@ -568,8 +576,8 @@ function telaSolicitacao(el, id) {
         (s.ocIds && s.ocIds.length ? '<div class="cartao"><h3>Compras geradas</h3>' +
           s.ocIds.map((oid) => { const o = achar('oc', oid); return o ?
             '<div class="arquivo-solto"><span class="ic">🧾</span><div><div class="nome">' + esc(o.codigo) + '</div>' +
-            '<div class="meta">' + esc((o.fornecedor || {}).nome || 'sem fornecedor') + ' · ' + fmt.brl(o.totalLiquido) + '</div></div>' +
-            '<div class="acoes">' + etiqueta(o.situacao) + '<button class="btn pequeno" data-veroc="' + esc(o.id) + '">Abrir</button></div></div>' : ''; }).join('') +
+            '<div class="meta">' + esc((o.fornecedor || {}).nome || 'sem fornecedor') + (veCompras && Number.isFinite(o.totalLiquido) ? ' · ' + fmt.brl(o.totalLiquido) : '') + '</div></div>' +
+            '<div class="acoes">' + etiqueta(o.situacao) + (veCompras ? '<button class="btn pequeno" data-veroc="' + esc(o.id) + '">Abrir</button>' : '') + '</div></div>' : ''; }).join('') +
           '</div>' : '') +
       '</div>' +
       '<div>' +
@@ -646,7 +654,7 @@ function saldoScPorItem(sc) {
         const legadoExato = !i.origemScId && !i.origemScItemId && (o.scIds || []).some(id => String(id) === String(sc.id)) && i.id != null && item.id != null && String(i.id) === String(item.id);
         if (!explicito && !legadoExato) continue;
         if (!unidadesCompativeisSaldo(i.unid, item.unid)) continue;
-        const entregue = Math.max(0, jaRecebido(o, i.id));
+        const entregue = Math.min(Math.max(0, Number(i.qtd) || 0), Math.max(0, jaRecebido(o, i.id)));
         recebido += entregue;
         // Uma entrega encerrada com falta não promete mais o saldo restante.
         comprado += o.situacao === 'entregue' ? entregue : Math.max(0, Number(i.qtd) || 0);
@@ -1075,6 +1083,12 @@ function editorOC(el, id, scId) {
     if (!itens.length) { erroOC('Inclua pelo menos um item com descrição.', caixa.querySelector('[data-i=descricao]')); return; }
     const invalido = itens.find(i => !Number.isFinite(i.qtd) || i.qtd <= 0 || !Number.isFinite(i.preco) || i.preco < 0);
     if (invalido) { erroOC('Confira quantidade e preço de ' + invalido.descricao + ': a quantidade deve ser maior que zero e o preço não pode ser negativo.'); return; }
+    const baseRecebida = existente && (achar('oc', existente.id) || existente);
+    const unidadeAlterada = baseRecebida && itens.find(i => {
+      const antes = (baseRecebida.itens || []).find(x => x.id === i.id);
+      return antes && jaRecebido(baseRecebida, i.id) > 0 && !unidadesCompativeisSaldo(antes.unid, i.unid);
+    });
+    if (unidadeAlterada) { erroOC('Preserve a unidade de ' + unidadeAlterada.descricao + ': este item já teve recebimento.'); return; }
     const fornecedorIdSelecionado=document.getElementById('selForn').value,manterHistorico=!!existente&&fornecedorIdSelecionado==='__historico__',fornecedorAtual=achar('forn',fornecedorIdSelecionado);
     if(!manterHistorico&&!fornecedorMubiAtivo(fornecedorAtual)){erroOC('Selecione um fornecedor do Mubisys. ' + (ehDirecao() ? 'Use Buscar no Mubisys se ainda não estiver na lista.' : 'Peça à direção para importar o cadastro se não estiver na lista.'), seletorFornecedor);return;}
     d.fornecedor=manterHistorico?fornecedorOriginal:dadosFornecedorOC(fornecedorAtual);
@@ -1091,6 +1105,10 @@ function editorOC(el, id, scId) {
       difalValor: numeroBR(d.difalValor),
       frete: numeroBR(d.frete), seguro: numeroBR(d.seguro), desconto: numeroBR(d.desconto)
     });
+    // A base é a versão aberta no editor, não a versão que chegou enquanto ele
+    // ficou preenchido. O servidor pede revisão em vez de sobrescrever outra edição.
+    if (existente) novo._versaoBase = existente.versao || 0;
+    delete novo._operacao;
     // Vínculo com a O.S.: só vale o que foi CONFERIDO na busca. Número digitado
     // e não encontrado não vira vínculo — meia ligação é pior que nenhuma,
     // porque a compra apareceria no custo de um trabalho que não é dela.
@@ -1261,6 +1279,7 @@ function telaOC(el, id) {
     '>Preparar WhatsApp</button>');
 
   el.innerHTML =
+    (podeVer('config') ? avisoCadastroEmpresa(S.cfg.empresa) : '') +
     '<div class="grade g2">' +
       '<div>' +
         '<div class="cartao">' +
@@ -1428,7 +1447,7 @@ function botoesFluxoOC(o) {
   if (['confirmada', 'transito', 'parcial', 'enviada'].includes(o.situacao)) passos.push(b('receber', '5. Registrar recebimento', 'verde'));
   // Fornecedor entregou 118 de 120 e avisou que o resto não vem: sem esta saída
   // a ordem ficava presa em "recebida em parte" para sempre.
-  if (o.situacao === 'parcial') passos.push(b('encerrar', 'Encerrar mesmo com falta', ''));
+  if (!['cancelada', 'entregue'].includes(o.situacao) && (o.recebimentos || []).length) passos.push(b('encerrar', 'Encerrar saldo restante com falta', ''));
   // Chegou (inteiro ou em parte) e o pedido veio de alguém com WhatsApp na
   // solicitação/O.S.: um toque avisa "seu material chegou, veio pela X".
   if (['parcial', 'entregue'].includes(o.situacao) && (o.recebimentos || []).length) {
@@ -1439,7 +1458,7 @@ function botoesFluxoOC(o) {
       o.entregaPrevista < hojeISO() && !(o.recebimentos || []).length) {
     passos.push(b('cobrarAtraso', '⏰ Cobrar o fornecedor (atrasado)', 'perigo'));
   }
-  if (!['cancelada', 'entregue'].includes(o.situacao)) passos.push(b('cancelada', 'Cancelar ordem', 'perigo'));
+  if (!['cancelada', 'entregue'].includes(o.situacao) && !(o.recebimentos || []).length) passos.push(b('cancelada', 'Cancelar ordem', 'perigo'));
   if (o.situacao === 'entregue') {
     passos.push('<div class="aviso bom">Compra concluída e recebida na empresa.</div>');
     // A avaliação vale para a PRÓXIMA cotação: é ela que diz se chama de novo.
@@ -1846,19 +1865,23 @@ async function cobrarAtrasoZap(o) {
 }
 
 async function avancarOC(o, destino) {
+  o = achar('oc', o.id) || o;
+  // Uma entrega física não desaparece ao cancelar o que falta entregar.
+  if (destino === 'cancelada' && (o.recebimentos || []).length) destino = 'encerrar';
   if (destino === 'receber') return telaReceberOC(o);
   if (destino === 'avaliar') return avaliarFornecedor(o);
   if (destino === 'avisarChegada') return avisarChegadaZap(o);
   if (destino === 'cobrarAtraso') return cobrarAtrasoZap(o);
   if (destino === 'encerrar') {
     const m = await perguntar('O que ficou faltando e por quê?', {
-      titulo: 'Encerrar mesmo com falta', multi: true, obrigatorio: true, ok: 'Encerrar'
+      titulo: 'Encerrar saldo restante', multi: true, obrigatorio: true, ok: 'Manter o recebido e encerrar saldo'
     });
     if (!m) return;
     // Sem recebidoEm, a nota de pontualidade do fornecedor passava a ser medida
     // pela data da última mexida na ordem — que pode ser meses depois.
-    const n = Object.assign({}, o, { situacao: 'entregue', encerradaComFalta: m,
+    const n = Object.assign({}, o, { _versaoBase: o.versao || 0, situacao: 'entregue', encerradaComFalta: m,
       recebidoEm: o.recebidoEm || new Date().toISOString() });
+    delete n._operacao;
     n.historico = historiar(o, 'Encerrada mesmo com falta: ' + m);
     salvar('oc', n);
     // Só fecha a solicitação quando TODAS as ordens dela chegaram: um pedido
@@ -1871,7 +1894,8 @@ async function avancarOC(o, destino) {
   if (destino === 'cancelada') {
     const m = await perguntar('Por que está cancelando?', { titulo: 'Cancelar ordem', multi: true, obrigatorio: true, ok: 'Cancelar ordem' });
     if (!m) return;
-    const n = Object.assign({}, o, { situacao: 'cancelada', motivoCancelamento: m });
+    const n = Object.assign({}, o, { _versaoBase: o.versao || 0, situacao: 'cancelada', motivoCancelamento: m });
+    delete n._operacao;
     n.historico = historiar(o, 'Cancelada: ' + m);
     salvar('oc', n);
     // Solicitação ligada volta para a fila — senão ficava presa em "em compra"
@@ -1896,7 +1920,8 @@ async function avancarOC(o, destino) {
     if (nf === null) return;
     if (nf) extra.nf = nf;
   }
-  const n = Object.assign({}, o, extra, { situacao: destino });
+  const n = Object.assign({}, o, extra, { _versaoBase: o.versao || 0, situacao: destino });
+  delete n._operacao;
   n.historico = historiar(o, textos[destino] || destino);
   const salvo = salvar('oc', n);
   render();
@@ -2171,7 +2196,7 @@ function telaReceberOC(o) {
         });
         const cancelada = base.situacao === 'cancelada';
         const n = Object.assign({}, base, {
-          recebimentos,
+          _operacao: 'recebimento', recebimentos,
           // Compra cancelada enquanto o modal estava aberto continua cancelada:
           // a entrega fica registrada, mas quem decide o rumo é o escritório.
           situacao: cancelada ? 'cancelada' : (completo ? 'entregue' : 'parcial'),
@@ -2278,7 +2303,7 @@ function anexarFotoRecebimento(ocId, recId) {
             fotosPendentes: Math.max(0, faltavam - novas.length)
           });
         });
-        const n = Object.assign({}, base, { recebimentos });
+        const n = Object.assign({}, base, { _operacao: 'recebimento', recebimentos });
         n.historico = historiar(base, novas.length + ' foto(s) anexada(s) ao recebimento');
         salvar('oc', n);
         fecharEste(fundo); render();

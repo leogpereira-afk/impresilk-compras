@@ -87,13 +87,21 @@ function idsFamiliaCotacao(c) {
   }
   return ids;
 }
-function itensPendentesCotacao(c) {
+function itensPendentesCotacao(c, visitados = new Set()) {
+  if (visitados.has(String(c.id))) return [];
+  visitados.add(String(c.id));
+  const origem = c.cotacaoOrigemId && achar('cot', c.cotacaoOrigemId);
+  const saldoOrigem = origem ? itensPendentesCotacao(origem, visitados) : null;
   const familia = idsFamiliaCotacao(c);
   const ordens = lista('oc').filter(o => !o.apagadoEm && o.situacao !== 'cancelada' && familia.has(String(o.cotacaoId || '')));
   return (c.itens || []).map(i => {
     let comprado = 0;
-    for (const o of ordens) for (const x of (o.itens || [])) if (i.id != null && String(x.id) === String(i.id) && unidadesCompativeisSaldo(x.unid, i.unid)) comprado += o.situacao === 'entregue' ? jaRecebido(o, x.id) : Math.max(0, Number(x.qtd) || 0);
+    for (const o of ordens) for (const x of (o.itens || [])) if (i.id != null && String(x.id) === String(i.id) && unidadesCompativeisSaldo(x.unid, i.unid)) comprado += o.situacao === 'entregue' ? Math.min(Math.max(0, Number(x.qtd) || 0), Math.max(0, jaRecebido(o, x.id))) : Math.max(0, Number(x.qtd) || 0);
     let qtd = Math.max(0, (Number(i.qtd) || 0) - comprado);
+    if (saldoOrigem) {
+      const naOrigem = saldoOrigem.find(x => String(x.id) === String(i.id) && unidadesCompativeisSaldo(x.unid, i.unid));
+      qtd = Math.min(qtd, naOrigem ? naOrigem.qtd : 0);
+    }
     const sid = i.origemScId || ((c.scIds || []).length === 1 ? c.scIds[0] : '');
     const sc = sid && achar('sc', sid);
     const saldoSc = sc && saldoScPorItem(sc).find(s => String(s.item.id) === String(i.origemScItemId || i.id));
@@ -469,19 +477,32 @@ function pedirPrecoWhats(c, f) {
 }
 
 /* ── Escolher e virar ordem de compra ──────────────────────────────────────── */
+function conferirSaldoProposta(c, f) {
+  const saldo = itensPendentesCotacao(c);
+  const cotados = itensCotados(c, f);
+  if (!cotados.length) return 'Esta proposta não tem itens com preço. Aguarde uma proposta válida.';
+  if (cotados.some(i => !saldo.some(s => String(s.id) === String(i.id) && unidadesCompativeisSaldo(s.unid, i.unid) && Number(i.qtd) <= s.qtd + 0.001))) {
+    return 'O saldo mudou ou já foi comprado. Confira as compras vinculadas e cote apenas o que ainda falta antes de escolher a proposta.';
+  }
+  return '';
+}
 async function escolherFornecedor(c, fid) {
-  const atual = achar('cot', c.id) || c;
+  let atual = achar('cot', c.id) || c;
   const f = (atual.fornecedores || []).find((x) => x.id === fid);
   if (!f) return;
 
   // Cotação já decidida não gera uma segunda ordem: duas pessoas abrindo a
   // mesma tela ao mesmo tempo compravam o material duas vezes.
-  if (atual.ocId || atual.situacao === 'atendida') {
-    const jaOC = achar('oc', atual.ocId);
+  const existente = achar('oc', 'cot-' + atual.id) || lista('oc').find(o => o.cotacaoId === atual.id && !o.apagadoEm);
+  if (atual.ocId || atual.situacao !== 'aberta' || existente) {
+    const jaOC = existente || achar('oc', atual.ocId);
     toast('Esta cotação já foi decidida' + (jaOC ? ' — ordem ' + (jaOC.codigo || '') : '') + '.', 'ruim');
     if (jaOC) irPara('compras/' + jaOC.id);
     return;
   }
+
+  const erroSaldo = conferirSaldoProposta(atual, f);
+  if (erroSaldo) { toast(erroSaldo, 'ruim'); return; }
 
   const outros = (atual.fornecedores || []).filter((x) => x.id !== fid && respondeu(x));
   const t = totalCotacao(atual, f);
@@ -509,6 +530,16 @@ async function escolherFornecedor(c, fid) {
       obrigatorio: naoEMenor || !!faltando.length, multi: naoEMenor || !!faltando.length,
       ok: 'Escolher e gerar ordem' });
   if (motivo === null) return;
+  // A decisão pode ficar aberta enquanto outra pessoa compra ou o fornecedor
+  // atualiza a proposta. Nunca copie quantidades/preços de uma decisão antiga.
+  const conferida = achar('cot', atual.id) || atual;
+  const fornecedorConferido = (conferida.fornecedores || []).find(x => x.id === fid);
+  const mudouProposta = !fornecedorConferido || JSON.stringify([conferida.itens, fornecedorConferido]) !== JSON.stringify([atual.itens, f]);
+  const erroAtual = fornecedorConferido && conferirSaldoProposta(conferida, fornecedorConferido);
+  if (conferida.situacao !== 'aberta' || conferida.ocId || achar('oc', 'cot-' + atual.id) || mudouProposta || erroAtual) {
+    toast(erroAtual || 'A cotação mudou durante a escolha. Reabra a proposta para conferir antes de gerar a compra.', 'ruim'); return;
+  }
+  atual = conferida;
 
   // 1. marca a escolhida
   const fornecedores = (atual.fornecedores || []).map((x) =>

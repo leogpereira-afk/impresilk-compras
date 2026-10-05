@@ -246,6 +246,10 @@ function rodapePDF(doc, texto) {
 
 /* ── Ordem de Compra ───────────────────────────────────────────────────────── */
 async function pdfOC(o, cfg) {
+  if (typeof pendenciasCadastroEmpresa === 'function' && typeof AUTH !== 'undefined' && AUTH.temCracha() && typeof ehDirecao === 'function' && ehDirecao()) {
+    const faltam = pendenciasCadastroEmpresa(cfg?.empresa);
+    if (faltam.length) toast('Confira o cadastro da empresa antes de enviar este PDF: falta ' + faltam.join(', ') + '.', 'ruim');
+  }
   // Em paralelo: a logo e a biblioteca chegam juntas, sem somar as esperas.
   const [logo] = await Promise.all([carregarLogo(), garantirJsPDF()]);
   const doc = novoDoc();

@@ -67,6 +67,29 @@ export async function atualizarRegistro(
   throw new Error("Outro aparelho está atualizando este registro. Seus dados continuam na fila; tente novamente.");
 }
 
+// Snapshot único fornecido pelo banco; cliente HTTP nunca escolhe o contexto.
+export async function atualizarNegocio(
+  colecao: string, id: string, transformar: (atual: any | null, contexto: any[]) => Promise<any> | any,
+): Promise<any> {
+  for (let tentativa = 0; tentativa < 8; tentativa++) {
+    const leitura = await db.rpc("compras_ler_contexto");
+    if (leitura.error || !leitura.data?.hash || !Array.isArray(leitura.data?.registros)) throw new Error("Não foi possível conferir o saldo atual da compra.");
+    const contexto = leitura.data.registros;
+    const registro = contexto.find((r: any) => r._col === colecao && r.id === id);
+    const atual = registro ? { ...registro } : null;
+    if (atual) delete atual._col;
+    const novo = await transformar(atual == null ? null : structuredClone(atual), contexto);
+    if (novo === null) return atual;
+    const { data, error } = await db.rpc("compras_gravar_contexto", {
+      p_colecao: colecao, p_id: id, p_esperado: atual, p_novo: novo, p_contexto_hash: leitura.data.hash,
+    });
+    if (error) throw new Error("Não foi possível confirmar a gravação: " + error.message);
+    if (data === true) return novo;
+    if (data !== false) throw new Error("Confirmação de gravação inválida");
+  }
+  throw new Error("Outra compra alterou o saldo. Seus dados continuam na fila; atualize e tente novamente.");
+}
+
 // Todos os registros (com a lixeira — o cliente é quem esconde o apagado).
 export async function lerTudo(colecoes: string[] | null, todas: string[]): Promise<any[]> {
   const alvo = (colecoes && colecoes.length ? colecoes : todas).filter((c) => todas.includes(c));

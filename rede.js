@@ -94,12 +94,15 @@ function ligarBuscaRede(el) {
 
 function htmlDiretorioFornecedores(fs) {
   const ordenados = ordenarFornecedores(fs);
+  const disponiveis = ordenados.filter(fornecedorMubiAtivo).length;
   return '<section class="forn-diretorio" aria-label="Diretório de fornecedores">' +
     '<div class="forn-busca"><div><label for="buscaRede">Buscar fornecedor ou produto</label>' +
       '<div class="forn-busca-campo"><input id="buscaRede" type="search" placeholder="Nome, material, nome comercial ou código…">' +
         '<button class="btn pequeno" id="limparBuscaForn" hidden>Limpar busca</button></div></div>' +
       '<span id="fornContagem" class="legenda" role="status" aria-live="polite">' + ordenados.length + ' fornecedores</span>' +
     '</div>' +
+    '<p class="forn-vinculo-resumo legenda">' + disponiveis + (disponiveis === 1 ? ' disponível' : ' disponíveis') +
+      ' para compra no Mubisys. Cadastros sem vínculo servem para consulta; para comprar, importe o fornecedor do ERP em Ferramentas ou busque-o na nova ordem.</p>' +
     (ordenados.length ? '<div class="forn-colunas" aria-hidden="true"><span>Fornecedor</span><span>O que fornece</span><span>Produtos e catálogos</span></div>' : '') +
     '<div class="forn-lista">' + ordenados.map(f => {
       const ofertas = ofertasFornecedor(f.id), catalogos = catalogosFornecedor(f.id);
@@ -111,6 +114,8 @@ function htmlDiretorioFornecedores(fs) {
       return '<a class="forn-linha" href="#/fornecedores/' + esc(f.id) + '" data-rede-texto="' + esc(pesquisa) + '">' +
         '<div class="forn-identidade"><span class="forn-inicial" aria-hidden="true">' + esc(inicial.toLocaleUpperCase('pt-BR')) + '</span><div>' +
           '<h3>' + esc(f.nome || 'Fornecedor sem nome') + '</h3>' +
+          '<span class="etiqueta forn-vinculo">' + (fornecedorMubiAtivo(f) ? 'Disponível para compra' :
+            String(f.origemMubi || '').trim() ? 'Inativo no ERP' : 'Sem vínculo com ERP') + '</span>' +
           (contato ? '<p>' + esc(contato) + '</p>' : '<p>Contato não informado</p>') +
         '</div></div>' +
         '<div class="forn-produtos"><span class="forn-rotulo">O que fornece</span>' +

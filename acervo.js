@@ -13,10 +13,20 @@
 const ICONES = { pdf: '📕', dwg: '📐', dxf: '📐', jpg: '🖼️', jpeg: '🖼️', png: '🖼️', doc: '📄', docx: '📄', xls: '📊', xlsx: '📊', zip: '🗜️', rar: '🗜️' };
 const iconeArquivo = (nome) => ICONES[String(nome || '').split('.').pop().toLowerCase()] || '📎';
 
+// Mesmo limite do serviço de anexos. Validar antes de iniciar o envio evita
+// que um arquivo incompatível consuma tempo e deixe o formulário sem saída.
+const LIMITE_ARQUIVO_ACERVO = 1024 * 1024 * 1024;
+function arquivosCabemNoAcervo(arquivos) {
+  const grande = Array.from(arquivos || []).find(f => f.size > LIMITE_ARQUIVO_ACERVO);
+  if (!grande) return true;
+  toast('“' + String(grande.name || 'Arquivo').slice(0, 120) + '” ultrapassa o limite de 1 GB por arquivo. Reduza o tamanho ou use um link.', 'ruim');
+  return false;
+}
+
 /* Sobe um ou vários arquivos mostrando o progresso. Devolve os metadados. */
 async function subirArquivos(files, aoTerminarCada) {
   const arquivos = Array.from(files || []);
-  if (!arquivos.length) return [];
+  if (!arquivos.length || !arquivosCabemNoAcervo(arquivos)) return [];
   // semFechar (um toque errado matava o envio de uma prancha de 40MB), mas com
   // saída consciente: o botão Cancelar interrompe entre as partes.
   const cancelar = { pedido: false };
@@ -108,17 +118,17 @@ TELAS.catalogos = function (el) {
     podeMexer ? '<button class="btn primario" id="subirProj">⬆️ Subir catálogo</button>' : '');
 
   el.innerHTML =
-    '<div class="filtros">' +
-      '<input type="search" id="pjBusca" placeholder="Buscar catálogo…" value="' + esc(filtro.busca) + '">' +
-      '<select id="pjObra"><option value="">Todos os destinos</option>' +
+    '<div class="filtros filtros-acervo">' +
+      campo('Buscar catálogo', '<input type="search" id="pjBusca" placeholder="Nome ou descrição…" value="' + esc(filtro.busca) + '">') +
+      campo('Destino', '<select id="pjObra"><option value="">Todos os destinos</option>' +
         obras().map((o) => '<option value="' + esc(o.id) + '"' + (filtro.obra === o.id ? ' selected' : '') + '>' + esc(o.nome) + '</option>').join('') +
-      '</select>' +
-      '<select id="pjDisc"><option value="">Todas as linhas</option>' +
+      '</select>') +
+      campo('Linha de material', '<select id="pjDisc"><option value="">Todas as linhas</option>' +
         cfgLista('disciplinas').map((d) => '<option' + (filtro.disciplina === d ? ' selected' : '') + '>' + esc(d) + '</option>').join('') +
-      '</select>' +
+      '</select>') +
     '</div>' +
     (podeMexer ? '<div class="solta-aqui" id="solta">Arraste os arquivos aqui ou clique para escolher<br>' +
-      '<small>PDF, DWG, imagens, planilhas — qualquer tamanho</small></div>' : '') +
+      '<small>PDF, DWG, imagens e planilhas · até 1 GB por arquivo</small></div>' : '') +
     (filtrados.length ? Object.keys(porDisciplina).sort().map((d) =>
       '<div class="cartao"><h3>' + esc(d) + ' <span class="etiqueta">' + porDisciplina[d].length + '</span></h3>' +
       porDisciplina[d].map((p) =>
@@ -184,7 +194,7 @@ TELAS.catalogos = function (el) {
 // Pergunta destino/linha e só então manda os arquivos.
 function formularioCatalogo(files, fornecedorId = '') {
   const arquivos = Array.from(files || []);
-  if (!arquivos.length) return;
+  if (!arquivos.length || !arquivosCabemNoAcervo(arquivos)) return;
   abrirModal({
     titulo: 'Subir ' + arquivos.length + ' catálogo(s)',
     corpo: '<div id="fProj">' +
@@ -491,7 +501,7 @@ function formularioTreinamento() {
       '<div class="campo"><label>Link do vídeo (YouTube, Drive…)</label>' +
         '<input type="url" data-campo="link" placeholder="https://…">' +
         '<div class="dica">Vídeo pesa demais para guardar aqui — cole o link. Se for PDF ou apostila, use o arquivo abaixo.</div></div>' +
-      '<div class="campo"><label>Ou um arquivo (PDF, apostila)</label>' +
+      '<div class="campo"><label>Ou um arquivo (PDF, apostila, até 1 GB)</label>' +
         '<input type="file" id="treinArq"></div>' +
     '</div>',
     acoes: [

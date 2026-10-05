@@ -21,8 +21,11 @@ await test('solicitante não modifica recebimento antigo',()=>assert(run("motivo
 function servidor(file,seed={},perfil='direcao'){
   const records=new Map(Object.entries(clone(seed)));let handler;
   const chunks=new Map();let rpcCalls=0;
+  const hash=()=>JSON.stringify([...records].filter(([k])=>['sc','oc','cot'].includes(k.split('/')[0])).sort(([a],[b])=>a.localeCompare(b)));
   const db={rpc:async(name,p)=>{
-    if(name!=='compras_gravar_se_atual')return {data:false};
+    if(name==='compras_ler_contexto') return {data:{hash:hash(),registros:[...records].filter(([k])=>['sc','oc','cot'].includes(k.split('/')[0])).map(([k,v])=>({...clone(v),_col:k.split('/')[0]}))}};
+    if(name==='compras_gravar_contexto' && p.p_contexto_hash!==hash())return {data:false};
+    if(!['compras_gravar_se_atual','compras_gravar_contexto'].includes(name))return {data:false};
     rpcCalls++;const k=p.p_colecao+'/'+p.p_id,current=records.get(k)??null;
     if(JSON.stringify(current)!==JSON.stringify(p.p_esperado))return {data:false};
     records.set(k,clone(p.p_novo));return {data:true};
@@ -46,6 +49,7 @@ function servidor(file,seed={},perfil='direcao'){
   const dataCode=code('supabase/functions/_shared/dados.ts');
   const cas=dataCode.slice(dataCode.indexOf('async function atualizarRegistro('),dataCode.indexOf('// Todos os registros (com a lixeira'));
   if(cas)vm.runInContext(cas,ctx);
+  vm.runInContext('Object.assign(globalThis, (()=>{'+code('supabase/functions/_shared/rede.ts')+';return {validarRede,ErroRede};})());',ctx);
   vm.runInContext(code('supabase/functions/_shared/integridade.ts'),ctx);
   vm.runInContext(code(file),ctx);
   return {ctx,records,chunks,rpcCalls:()=>rpcCalls,
@@ -79,7 +83,7 @@ await test('reenvio do mesmo recebimento é idempotente',async()=>{
 });
 await test('permissão é revalidada após disputa no banco',async()=>{
   const h=servidor(nucleo,{'oc/o1':oc},'obra');const rpc=h.ctx.db.rpc;let changed=false;
-  h.ctx.db.rpc=async(name,p)=>{if(!changed){changed=true;h.records.set('oc/o1',{...oc,situacao:'cancelada'});}return rpc(name,p);};
+  h.ctx.db.rpc=async(name,p)=>{if(name==='compras_gravar_contexto'&&!changed){changed=true;h.records.set('oc/o1',{...oc,situacao:'cancelada'});}return rpc(name,p);};
   const r=await h.call({action:'salvarLote',itens:[{colecao:'oc',registro:{id:'o1',recebimentos:[{id:'r1',itens:[{itemId:'i1',qtd:1}]}],situacao:'parcial'}}]});
   const out=await r.json();assert.equal(out.salvos.length,0);assert.equal(out.recusados[0].id,'o1');assert.equal(out.recusados[0].colecao,'oc');assert.match(out.recusados[0].motivo,/cancelada/);assert.equal(h.records.get('oc/o1').recebimentos.length,0);
 });
@@ -92,7 +96,7 @@ for(const patch of [{itens:[{id:'i1',qtd:-1,preco:10}]},{itens:[{id:'i1',qtd:10,
   await test('valores e recebimentos inválidos são recusados',async()=>{const h=servidor(nucleo,{'oc/o1':oc});await assert.rejects(()=>h.ctx.gravar('oc',{...oc,...patch},'A'));assert.deepEqual(h.records.get('oc/o1'),oc);});
 }
 await test('servidor calcula o total a partir de itens e encargos',async()=>{
-  const h=servidor(nucleo,{'oc/o1':oc});await h.ctx.gravar('oc',{...oc,total:1,totalLiquido:1,frete:20,desconto:10},'A');const r=h.records.get('oc/o1');assert.equal(r.total,100);assert.equal(r.totalLiquido,110);
+  const h=servidor(nucleo,{'oc/o1':oc});await h.ctx.gravar('oc',{...oc,_versaoBase:0,total:1,totalLiquido:1,frete:20,desconto:10},'A');const r=h.records.get('oc/o1');assert.equal(r.total,100);assert.equal(r.totalLiquido,110);
 });
 await test('encerramento manual preserva falta e não quita SC',async()=>{
   const order={...oc,scIds:['s1'],recebimentos:[{id:'r1',itens:[{itemId:'i1',qtd:4}]}],situacao:'parcial'};
@@ -103,9 +107,9 @@ await test('saldo confirmado por dois recebimentos fecha SC',async()=>{
   const order={...oc,scIds:['s1']};const h=servidor(nucleo,{'oc/o1':order,'sc/s1':{id:'s1',situacao:'em_compra',ocIds:['o1'],itens:[{id:'i1',qtd:10}]}});
   await Promise.all([4,6].map((q,i)=>h.ctx.gravar('oc',{...order,recebimentos:[{id:'r'+i,itens:[{itemId:'i1',qtd:q}]}]},'A')));assert.equal(h.records.get('sc/s1').situacao,'atendida');
 });
-await test('apagar OC entregue reabre saldo da SC',async()=>{
+await test('apagar OC recebida é recusado e preserva saldo da SC',async()=>{
   const order={...oc,scIds:['s1'],situacao:'entregue',recebimentos:[{id:'r1',itens:[{itemId:'i1',qtd:10}]}]};
-  const h=servidor(nucleo,{'oc/o1':order,'sc/s1':{id:'s1',situacao:'atendida',ocIds:['o1'],itens:[{id:'i1',qtd:10}]}});const r=await h.call({action:'apagar',colecao:'oc',id:'o1'});assert.equal(r.status,200);assert.equal(h.records.get('sc/s1').situacao,'aprovada');assert(h.records.get('oc/o1').apagadoEm);
+  const h=servidor(nucleo,{'oc/o1':order,'sc/s1':{id:'s1',situacao:'atendida',ocIds:['o1'],itens:[{id:'i1',qtd:10}]}});const r=await h.call({action:'apagar',colecao:'oc',id:'o1'});assert.equal(r.status,400);assert.equal(h.records.get('sc/s1').situacao,'atendida');assert.equal(h.records.get('oc/o1').apagadoEm,undefined);
 });
 const cot={id:'c1',situacao:'aberta',itens:[{id:'i1',qtd:2}],fornecedores:[{id:'f1',nome:'A',token:'t1'},{id:'f2',nome:'B',token:'t2'}],historico:[]};
 await test('duas respostas públicas simultâneas são preservadas',async()=>{
@@ -115,7 +119,7 @@ await test('reenviar resposta pública idêntica não duplica histórico',async(
   const h=servidor(nucleo,{'cot/c1':cot});const body={action:'responderCotacao',id:'c1',t:'t1',precos:{i1:10},frete:5};await h.call(body);await h.call(body);assert.equal(h.records.get('cot/c1').historico.length,1);
 });
 await test('resposta pública não reabre cotação cancelada concorrente',async()=>{
-  const h=servidor(nucleo,{'cot/c1':cot});const rpc=h.ctx.db.rpc;h.ctx.db.rpc=async(name,p)=>{h.records.set('cot/c1',{...cot,situacao:'cancelada'});return rpc(name,p);};
+  const h=servidor(nucleo,{'cot/c1':cot});const rpc=h.ctx.db.rpc;h.ctx.db.rpc=async(name,p)=>{if(name==='compras_gravar_se_atual')h.records.set('cot/c1',{...cot,situacao:'cancelada'});return rpc(name,p);};
   const r=await h.call({action:'responderCotacao',id:'c1',t:'t1',precos:{i1:10}});assert.equal(r.status,400);assert.equal(h.records.get('cot/c1').situacao,'cancelada');assert.equal(h.records.get('cot/c1').fornecedores[0].respondidoEm,undefined);
 });
 await test('frete público negativo é recusado',async()=>{const h=servidor(nucleo,{'cot/c1':cot});const r=await h.call({action:'responderCotacao',id:'c1',t:'t1',precos:{i1:10},frete:-3});assert.equal(r.status,400);assert.deepEqual(h.records.get('cot/c1'),cot);});
@@ -146,14 +150,14 @@ await test('origem explícita preserva saldo com IDs distintos e descrição rep
   const r=h.ctx.saldoSolicitacao(sc,orders);assert.equal(r[0].saldo,0);assert.equal(r[1].saldo,3);assert.equal(h.ctx.situacaoSolicitacao(sc,orders,[]),'em_compra');
 });
 await test('conflitos persistentes não são confirmados como gravação',async()=>{
-  const h=servidor(nucleo,{'oc/o1':oc});let n=0;h.ctx.db.rpc=async()=>{n++;return {data:false};};await assert.rejects(()=>h.ctx.gravar('oc',oc,'A'),/continuam na fila/);assert.equal(n,8);assert.deepEqual(h.records.get('oc/o1'),oc);
+  const h=servidor(nucleo,{'oc/o1':oc});let n=0;const rpc=h.ctx.db.rpc;h.ctx.db.rpc=async(name,p)=>{if(name==='compras_ler_contexto')return rpc(name,p);n++;return {data:false};};await assert.rejects(()=>h.ctx.gravar('oc',oc,'A'),/continuam na fila/);assert.equal(n,8);assert.deepEqual(h.records.get('oc/o1'),oc);
 });
 await test('falha na RPC não vira confirmação nem fallback incondicional',async()=>{
-  const h=servidor(nucleo,{'oc/o1':oc});h.ctx.db.rpc=async()=>({error:{message:'database offline'}});await assert.rejects(()=>h.ctx.gravar('oc',{...oc,frete:30},'A'),/confirmar a gravação/);assert.deepEqual(h.records.get('oc/o1'),oc);
+  const h=servidor(nucleo,{'oc/o1':oc});const rpc=h.ctx.db.rpc;h.ctx.db.rpc=async(name,p)=>name==='compras_ler_contexto'?rpc(name,p):({error:{message:'database offline'}});await assert.rejects(()=>h.ctx.gravar('oc',{...oc,_versaoBase:0,frete:30},'A'),/confirmar a gravação/);assert.deepEqual(h.records.get('oc/o1'),oc);
 });
 
 await test('duas escolhas simultâneas da cotação preservam o primeiro fornecedor',async()=>{
-  const h=servidor(nucleo,{'cot/c1':cot});const order={...oc,id:'cot-c1',cotacaoId:'c1',situacao:'rascunho',fornecedorId:'a'};
+  const h=servidor(nucleo,{'cot/c1':cot});const order={...oc,id:'cot-c1',cotacaoId:'c1',situacao:'rascunho',fornecedorId:'a',itens:[{id:'i1',qtd:2,preco:10}]};
   const results=await Promise.allSettled([h.ctx.gravar('oc',order,'A'),h.ctx.gravar('oc',{...order,fornecedorId:'b'},'B')]);
   assert.equal(results.filter(r=>r.status==='fulfilled').length,1);assert.equal([...h.records.keys()].filter(k=>k.startsWith('oc/')).length,1);assert.equal(h.records.get('oc/cot-c1').fornecedorId,'a');
   await h.ctx.gravar('oc',order,'A');assert.equal(h.records.get('oc/cot-c1').fornecedorId,'a');
@@ -176,3 +180,5 @@ await test('unidades incompatíveis não baixam saldo da solicitação',()=>{
 });
 console.log(`${count} verificações passaram; ${failures} falharam`);
 if(failures)process.exitCode=1;
+
+export { servidor, oc, cot, obra, access };

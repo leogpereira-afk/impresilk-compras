@@ -61,3 +61,8 @@ jobs:
           node tests/acervo-auditoria.mjs
           node tests/cotacao-saldo.mjs
           node tests/pdf-auditoria.mjs
+          node tests/experiencia-v19.mjs
+          node tests/fluxos-v19.mjs
+          node tests/persistencia-v19.mjs
+          node tests/backend-pos-v18.mjs
+          node tests/contexto-sql.mjs

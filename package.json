@@ -7,6 +7,7 @@
     "test:ui": "node tests/experiencia-ui.mjs"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
     "jsdom": "25.0.1"
   }
 }
